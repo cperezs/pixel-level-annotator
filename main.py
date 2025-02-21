@@ -16,8 +16,6 @@ class PixelAnnotationApp(QMainWindow):
         self.setWindowTitle("Pixel Annotation Tool")
         self.setGeometry(100, 100, 1024, 768)
         
-        self.zoom = 20  # Zoom inicial (20 veces el tamaño original)
-        
         # Layouts
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -26,11 +24,11 @@ class PixelAnnotationApp(QMainWindow):
               
         # Toolbar
         toolbar_layout = QVBoxLayout()
-        self.q_zoom_in_button = QPushButton("Zoom In")
+        self.q_zoom_in_button = QPushButton("Zoom In (+)")
         self.q_zoom_in_button.clicked.connect(self.cb_zoom_in)
-        self.q_zoom_out_button = QPushButton("Zoom Out")
+        self.q_zoom_out_button = QPushButton("Zoom Out (-)")
         self.q_zoom_out_button.clicked.connect(self.cb_zoom_out)
-        self.q_undo_button = QPushButton("Undo")
+        self.q_undo_button = QPushButton("Undo (Ctrl+Z)")
         self.q_undo_button.clicked.connect(self.cb_undo)  
         toolbar_layout.addWidget(self.q_zoom_in_button)
         toolbar_layout.addWidget(self.q_zoom_out_button)
@@ -38,50 +36,59 @@ class PixelAnnotationApp(QMainWindow):
 
         # Threshold selector
         toolbar_layout.addWidget(QLabel("Threshold"))
-        self.q_nearest_slider = QSlider(Qt.Orientation.Horizontal)
-        self.q_nearest_slider.setMinimum(1)
-        self.q_nearest_slider.setMaximum(255)
-        self.q_nearest_slider.setValue(32)
-        self.q_nearest_slider.setTickInterval(16)
-        self.q_nearest_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.q_nearest_slider.valueChanged.connect(self.cb_update_threshold)
-        toolbar_layout.addWidget(self.q_nearest_slider)
+        self.q_threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.q_threshold_slider.setMinimum(1)
+        self.q_threshold_slider.setMaximum(128)
+        self.q_threshold_slider.setValue(32)
+        self.q_threshold_slider.setTickInterval(16)
+        self.q_threshold_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.q_threshold_slider.valueChanged.connect(self.cb_update_threshold)
+        toolbar_layout.addWidget(self.q_threshold_slider)
 
         # Layer buttons
-        self.q_layer_0_button = QPushButton("background")
+        self.q_layer_0_button = QPushButton("background (1)")
         self.q_layer_0_button.clicked.connect(lambda: self.cb_select_layer(0))
         self.q_layer_0_button.setShortcut("1")
-        self.q_layer_1_button = QPushButton("staff")
+        self.q_layer_1_button = QPushButton("staff (2)")
         self.q_layer_1_button.clicked.connect(lambda: self.cb_select_layer(1))
         self.q_layer_1_button.setShortcut("2")
-        self.q_layer_2_button = QPushButton("notes")
+        self.q_layer_2_button = QPushButton("notes (3)")
         self.q_layer_2_button.clicked.connect(lambda: self.cb_select_layer(2))
         self.q_layer_2_button.setShortcut("3")
-        self.q_layer_3_button = QPushButton("lyrics")
+        self.q_layer_3_button = QPushButton("lyrics (4)")
         self.q_layer_3_button.clicked.connect(lambda: self.cb_select_layer(3))
         self.q_layer_3_button.setShortcut("4")
 
         # Crear un grupo de botones exclusivos
-        self.button_group = QButtonGroup(self)
-        self.button_group.setExclusive(True)
+        self.q_button_group = QButtonGroup(self)
+        self.q_button_group.setExclusive(True)
 
         # Agregar botones al grupo
-        self.button_group.addButton(self.q_layer_0_button)
-        self.button_group.addButton(self.q_layer_1_button)
-        self.button_group.addButton(self.q_layer_2_button)
-        self.button_group.addButton(self.q_layer_3_button)
+        self.q_button_group.addButton(self.q_layer_0_button)
+        self.q_button_group.addButton(self.q_layer_1_button)
+        self.q_button_group.addButton(self.q_layer_2_button)
+        self.q_button_group.addButton(self.q_layer_3_button)
 
         # Habilitar el comportamiento tipo "toggle"
-        for button in self.button_group.buttons():
+        for button in self.q_button_group.buttons():
             button.setCheckable(True)
         self.q_layer_0_button.setChecked(True)
 
         toolbar_layout.addWidget(QLabel("Layers"))
 
-        # Show other layers
-        self.q_other_layers = QCheckBox("Show other layers")
-        self.q_other_layers.stateChanged.connect(self.toggle_other_layers)
+        # Show original image
+        self.q_show_image = QCheckBox("Show image (i)")
+        self.q_show_image.setChecked(True)
+        self.q_show_image.setShortcut("i")
+        self.q_show_image.stateChanged.connect(self.cb_show_image)
 
+        # Show other layers
+        self.q_other_layers = QCheckBox("Show other layers (o)")
+        self.q_other_layers.setChecked(True)
+        self.q_other_layers.setShortcut("o")
+        self.q_other_layers.stateChanged.connect(self.cb_toggle_other_layers)
+
+        toolbar_layout.addWidget(self.q_show_image)
         toolbar_layout.addWidget(self.q_other_layers)
         toolbar_layout.addWidget(self.q_layer_0_button)
         toolbar_layout.addWidget(self.q_layer_1_button)
@@ -91,18 +98,18 @@ class PixelAnnotationApp(QMainWindow):
         # Sidebar
         side_layout = QVBoxLayout()
         side_layout.addLayout(toolbar_layout)
-        self.image_label = QLabel("Images")
-        side_layout.addWidget(self.image_label)
-        self.image_list = QListWidget()
-        self.image_list.itemClicked.connect(self.load_image)
-        side_layout.addWidget(self.image_list)
+        self.q_image_label = QLabel("Images")
+        side_layout.addWidget(self.q_image_label)
+        self.q_image_list = QListWidget()
+        self.q_image_list.itemClicked.connect(self.load_image)
+        side_layout.addWidget(self.q_image_list)
         
         # Image display
         self.q_image_view = QGraphicsView()
         self.q_image_view.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.q_image_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.q_image_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.q_image_view.wheelEvent = self.wheel_event
+        self.q_image_view.wheelEvent = self.cb_wheel_event
         
         self.q_image_scene = QGraphicsScene()
         self.q_image_view.setScene(self.q_image_scene)
@@ -111,13 +118,20 @@ class PixelAnnotationApp(QMainWindow):
         self.q_grid = None
         
         image_layout = QVBoxLayout()
+
+        # Progress bar
+        self.q_progress_bar = QLabel("Progress")
+        self.q_progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.q_progress_bar.setText("0%")
+
+        image_layout.addWidget(self.q_progress_bar)
         image_layout.addWidget(self.q_image_view)
         
         main_layout.addLayout(side_layout, 1)
         main_layout.addLayout(image_layout, 10)
 
-        self.keyPressEvent = self.key_press_event
-        self.keyReleaseEvent = self.key_release_event
+        self.keyPressEvent = self.cb_key_press_event
+        self.keyReleaseEvent = self.cb_key_release_event
         
         # Variables de estado
         self.state = {
@@ -127,22 +141,25 @@ class PixelAnnotationApp(QMainWindow):
             "threshold": 32,
             "area_selection_start": None,
             "area_selection_end": None,
+            "show_other_layers": True,
+            "show_image": True,
         }
         self.listeners = {
             "zoom": [self.update_image_view],
             "image": [self.update_image_view],
             "selected_layer": [self.update_image_view],
+            "show_other_layers": [self.update_image_view],
+            "show_image": [self.update_image_view],
         }
 
         self.load_images()
         
         # Cargar la primera imagen de la lista si hay al menos una
-        if self.image_list.count() > 0:
-            self.image_list.setCurrentRow(0)
-            self.load_image(self.image_list.currentItem())
+        if self.q_image_list.count() > 0:
+            self.q_image_list.setCurrentRow(0)
+            self.load_image(self.q_image_list.currentItem())
         
         self.showMaximized()
-
 
     def set_state(self, state):
         """Establece el estado de la aplicación."""
@@ -166,11 +183,11 @@ class PixelAnnotationApp(QMainWindow):
         for listener in listeners:
             listener()
     
-    def key_press_event(self, event):
+    def cb_key_press_event(self, event):
         if event.key() == Qt.Key.Key_Space:
             self.q_annotations.setVisible(False)
 
-    def key_release_event(self, event):
+    def cb_key_release_event(self, event):
         """Maneja los eventos de teclado para deshacer y hacer zoom."""
         if event.key() == Qt.Key.Key_Z and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.cb_undo()
@@ -181,7 +198,7 @@ class PixelAnnotationApp(QMainWindow):
         elif event.key() == Qt.Key.Key_Space:
             self.q_annotations.setVisible(True)
 
-    def wheel_event(self, event):
+    def cb_wheel_event(self, event):
         """Maneja el evento de la rueda del mouse para hacer zoom o desplazarse."""
         if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
             # Desplazamiento horizontal
@@ -195,15 +212,18 @@ class PixelAnnotationApp(QMainWindow):
             else:
                 self.cb_zoom_out()
         else:
-            # Desplazamiento vertical
+            # Desplazamiento
             self.q_image_view.verticalScrollBar().setValue(
                 self.q_image_view.verticalScrollBar().value() - event.angleDelta().y()
+            )
+            self.q_image_view.horizontalScrollBar().setValue(
+                self.q_image_view.horizontalScrollBar().value() - event.angleDelta().x()
             )
 
     def load_images(self):
         """Carga las imágenes de la carpeta especificada en la lista."""
         for filename in ImageLoader.get_images():
-            self.image_list.addItem(filename)
+            self.q_image_list.addItem(filename)
     
     def load_image(self, item):
         """Carga la imagen seleccionada en el visor."""
@@ -224,36 +244,35 @@ class PixelAnnotationApp(QMainWindow):
         
         # Cargar la nueva imagen
         self.q_image = QGraphicsPixmapItem(q_pixmap)
-        self.q_image.setScale(self.zoom)  # Aplica el zoom inicial (20 veces)
+        zoom = 20
+        self.q_image.setScale(zoom)  # Aplica el zoom inicial (20 veces)
         self.q_image.setPos(0, 0)
         self.q_image_scene.addItem(self.q_image)
         
         # Cargar la imagen de anotaciones
         selected_layer = self.state["selected_layer"]
-        q_annotations_pixmap = image.get_annotations_pixmap(selected_layer)
+        show_other_layers = self.state["show_other_layers"]
+        q_annotations_pixmap = image.get_annotations_pixmap(selected_layer, show_other_layers)
         self.q_annotations = QGraphicsPixmapItem(q_annotations_pixmap)
-        self.q_annotations.setScale(self.zoom)  # Aplica el mismo zoom
+        self.q_annotations.setScale(zoom)  # Aplica el mismo zoom
         self.q_annotations.setPos(0, 0)
         self.q_image_scene.addItem(self.q_annotations)
                       
         # Conectar el evento de clic del mouse
-        self.q_image_view.mousePressEvent = self.mouse_press_event
-        self.q_image_view.mouseMoveEvent = self.mouse_move_event
-        self.q_image_view.mouseReleaseEvent = self.mouse_release_event
+        self.q_image_view.mousePressEvent = self.cb_mouse_press_event
 
         # Estado
         self.annotating = False
         self.start_pixel = None
         self.select_nearest = False
-        self.q_nearest_slider.setValue(32)
+        self.q_threshold_slider.setValue(32)
         self.thresholding = False
         self.q_annotations.setVisible(True)
 
         self.set_state({
-            "zoom": 20,
+            "zoom": zoom,
             "image": image,
             "selected_layer": 0,
-            "threshold": 32,
             "area_selection_start": None,
             "area_selection_end": None,
         })
@@ -263,11 +282,17 @@ class PixelAnnotationApp(QMainWindow):
         if self.state["image"]:
             image = self.state["image"]
             selected_layer = self.state["selected_layer"]
-            q_annotations_pixmap = image.get_annotations_pixmap(selected_layer)
+            show_other_layers = self.state["show_other_layers"]
+            show_image = self.state["show_image"]
+            q_annotations_pixmap = image.get_annotations_pixmap(selected_layer, show_other_layers)
             self.q_annotations.setPixmap(q_annotations_pixmap)
+
+            progress = image.get_progress()
+            self.q_progress_bar.setText(f"{progress}%")
 
             zoom = self.state["zoom"]
             self.q_image.setScale(zoom)  # Aplica el nuevo zoom
+            self.q_image.setVisible(show_image)
             self.q_annotations.setScale(zoom)  # Aplica el mismo zoom a las anotaciones
             scaled_width = self.q_image.pixmap().width() * zoom
             scaled_height = self.q_image.pixmap().height() * zoom
@@ -276,73 +301,41 @@ class PixelAnnotationApp(QMainWindow):
     
     def cb_update_threshold(self):
         """Establece el umbral para seleccionar los píxeles más cercanos."""
-        value = self.q_nearest_slider.value()
+        value = self.q_threshold_slider.value()
         self.set_state({"threshold": value})
     
-    def mouse_press_event(self, event: QMouseEvent):
+    def cb_mouse_press_event(self, event: QMouseEvent):
         """Maneja el evento de clic del mouse para anotar píxeles."""
 
         # Obtener la posición del clic en la escena
         scene_pos = self.q_image_view.mapToScene(event.pos())
         
         # Convertir la posición a coordenadas de píxel en la imagen original
-        pixel_x = int(scene_pos.x() / self.zoom)
-        pixel_y = int(scene_pos.y() / self.zoom)
+        zoom = self.state["zoom"]
+        pixel_x = int(scene_pos.x() / zoom)
+        pixel_y = int(scene_pos.y() / zoom)
 
-        if event.button() == Qt.MouseButton.LeftButton and self.q_annotations:
-            # Información para drag
-            self.annotating = True
-            self.thresholding = False
-            self.start_pixel = (pixel_x, pixel_y)
+        image = self.state["image"]
+        selected_layer = self.state["selected_layer"]
 
-            # Anotar el píxel en la capa 0
-            selected_layer = self.state["selected_layer"]
-            image = self.state["image"]
+        if event.button() == Qt.MouseButton.LeftButton and image:
+            # Anotar el píxel en la capa seleccionada
             image.annotate_pixel(pixel_x, pixel_y, selected_layer)
             self.set_state({"image": image})
         elif event.button() == Qt.MouseButton.RightButton:
-            selected_layer = self.state["selected_layer"]
-            self.start_pixel = (pixel_x, pixel_y)
-            self.annotating = False
-            self.thresholding = True
-            image = self.state["image"]
             threshold = self.state["threshold"]
             image.annotate_similar(pixel_x, pixel_y, selected_layer, threshold)
-            q_annotations_pixmap = image.get_annotations_pixmap(selected_layer)
-            self.q_annotations.setPixmap(q_annotations_pixmap)
+            self.set_state({"image": image})
     
-    def mouse_move_event(self, event: QMouseEvent):
-        """Si está anotando y se mueve a un pixel diferente, anota el pixel."""
-        # Obtener la posición del clic en la escena
-        scene_pos = self.q_image_view.mapToScene(event.pos())
-        
-        # Convertir la posición a coordenadas de píxel en la imagen original
-        pixel_x = int(scene_pos.x() / self.zoom) + 1
-        pixel_y = int(scene_pos.y() / self.zoom) + 1
-
-        if self.annotating and self.q_annotations:
-            # Si el pixel es diferente al anterior, anótalo
-            if (pixel_x, pixel_y) != self.start_pixel:
-                self.end_pixel = (pixel_x, pixel_y)
-                selected_layer = self.state["selected_layer"]
-                image = self.state["image"]
-                image.annotate_area(self.start_pixel, self.end_pixel, selected_layer)
-
-                # Actualizar la imagen de anotaciones
-                q_annotations_pixmap = image.get_annotations_pixmap(selected_layer)
-                self.q_annotations.setPixmap(q_annotations_pixmap)
-    
-    def mouse_release_event(self, event: QMouseEvent):
-        """Detiene la anotación cuando se suelta el botón del mouse."""
-        self.annotating = False
-        self.thresholding = False
-        self.start_pixel = None
-    
-    def toggle_other_layers(self):
+    def cb_toggle_other_layers(self):
         """Activa o desactiva el selector de vecinos."""
         state = self.q_other_layers.checkState()
-        self.select_nearest = (state == Qt.CheckState.Checked)
-        self._logger.info("Select nearest pixels: %s", self.select_nearest)
+        self.set_state({"show_other_layers": state == Qt.CheckState.Checked})
+    
+    def cb_show_image(self):
+        """Activa o desactiva la visualización de la imagen original."""
+        state = self.q_show_image.checkState()
+        self.set_state({"show_image": state == Qt.CheckState.Checked})
 
     def cb_select_layer(self, layer):
         """Selecciona la capa de anotación."""
@@ -365,16 +358,6 @@ class PixelAnnotationApp(QMainWindow):
         zoom = self.state["zoom"]
         if zoom > 5:  # Límite mínimo de zoom
             self.set_state({"zoom": zoom - 5})
-    
-    def update_zoom(self):
-        """Actualiza la escala de la imagen y la cuadrícula según el zoom actual."""
-        if self.q_image and self.q_annotations:
-            self.q_image.setScale(self.zoom)  # Aplica el nuevo zoom
-            self.q_annotations.setScale(self.zoom)  # Aplica el mismo zoom a las anotaciones
-            scaled_width = self.q_image.pixmap().width() * self.zoom
-            scaled_height = self.q_image.pixmap().height() * self.zoom
-            self.q_image_scene.setSceneRect(0, 0, scaled_width, scaled_height)
-            self.update_grid()  # Actualiza la cuadrícula
     
     def update_grid(self):
         """Dibuja una cuadrícula sobre la imagen."""
