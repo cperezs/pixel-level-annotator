@@ -34,27 +34,27 @@ class Image:
         # open image with openCV
         self.image = cv2.imread(self.filename)
         self.height, self.width, self.channels = self.image.shape
-        self.annotations = self._load_annotations(nlayers)
+        self._load_annotations(nlayers)
         self._save_annotations()
         self._saved_states = deque(maxlen=10)
         self._logger.info("Image loaded: %s", self.filename)
     
     def _load_annotations(self, nlayers):
-        annotations = []
+        self.annotations = []
         for i in range(nlayers):
             filename = os.path.join(ImageLoader.ANNOTATIONS, f"{os.path.splitext(os.path.basename(self.filename))[0]}_{i}.png")
             if os.path.exists(filename):
                 img = cv2.imread(filename, cv2.IMREAD_GRAYSCALE)
-                annotations.append(img)
+                self.annotations.append(img)
                 self._logger.info("Annotations loaded: %s", filename)
             else:
                 self._logger.info("Annotations not found: %s", filename)
                 break
-        if len(annotations) < nlayers:
+        if len(self.annotations) < nlayers:
             self._init_annotations(nlayers)
-        return annotations
 
     def _init_annotations(self, nlayers):
+        self.annotations = []
         for i in range(nlayers):
             binary_image = np.zeros((self.height, self.width), dtype=np.uint8)
             self.annotations.append(binary_image)
