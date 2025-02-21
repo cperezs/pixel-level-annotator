@@ -37,3 +37,4 @@ Images are saved after each annotation. You can stop the application at any time
 - **+**: Zoom in
 - **-**: Zoom out
 - **Ctrl + z**: Undo
+- **Shift + wheel**: Horizontal scroll
