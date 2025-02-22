@@ -104,7 +104,7 @@ class Image:
 
         # Desplazamientos en 8 direcciones (para conectar en diagonal también)
         directions = [(-1, 0), (1, 0), (0, -1), (0, 1) , (-1, -1), (-1, 1), (1, -1), (1, 1)]
-        annotated = self.get_all_annotations_mask(layer) if not ignore_annotations else np.zeros((height, width), np.uint8)
+        annotated = self.get_all_annotations_mask() if not ignore_annotations else np.zeros((height, width), np.uint8)
 
         while queue:
             cx, cy = queue.popleft()
