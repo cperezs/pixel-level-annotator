@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QListWidget, QPushButton,
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QImage, QMouseEvent
 from PyQt6.QtCore import Qt, QPoint
 import logging
+import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 
@@ -252,7 +253,11 @@ class PixelAnnotationApp(QMainWindow):
         # Cargar la imagen de anotaciones
         selected_layer = self.state["selected_layer"]
         show_other_layers = self.state["show_other_layers"]
-        q_annotations_pixmap = image.get_annotations_pixmap(selected_layer, show_other_layers)
+        ann_img = self.get_annotations_image(image, selected_layer, show_other_layers)
+        alto, ancho = ann_img.shape[:2]
+        bytes_per_line = ancho * 4
+        qimage = QImage(ann_img, ancho, alto, bytes_per_line, QImage.Format.Format_ARGB32)
+        q_annotations_pixmap = QPixmap.fromImage(qimage)
         self.q_annotations = QGraphicsPixmapItem(q_annotations_pixmap)
         self.q_annotations.setScale(zoom)  # Aplica el mismo zoom
         self.q_annotations.setPos(0, 0)
@@ -280,11 +285,24 @@ class PixelAnnotationApp(QMainWindow):
     def update_image_view(self):
         """Actualiza la vista de la imagen."""
         if self.state["image"]:
+            # obtiene la posición de la parte  visible de la imagen
+            hbar = self.q_image_view.horizontalScrollBar()
+            vbar = self.q_image_view.verticalScrollBar()
+            hvalue = hbar.value()
+            vvalue = vbar.value()
+            # Calcula la posición del punto central de la vista
+            hcenter = hvalue + self.q_image_view.width() // 2
+            vcenter = vvalue + self.q_image_view.height() // 2
+
             image = self.state["image"]
             selected_layer = self.state["selected_layer"]
             show_other_layers = self.state["show_other_layers"]
             show_image = self.state["show_image"]
-            q_annotations_pixmap = image.get_annotations_pixmap(selected_layer, show_other_layers)
+            ann_img = self.get_annotations_image(image, selected_layer, show_other_layers)
+            alto, ancho = ann_img.shape[:2]
+            bytes_per_line = ancho * 4
+            qimage = QImage(ann_img, ancho, alto, bytes_per_line, QImage.Format.Format_ARGB32)
+            q_annotations_pixmap = QPixmap.fromImage(qimage)
             self.q_annotations.setPixmap(q_annotations_pixmap)
 
             progress = image.get_progress()
@@ -296,7 +314,12 @@ class PixelAnnotationApp(QMainWindow):
             self.q_annotations.setScale(zoom)  # Aplica el mismo zoom a las anotaciones
             scaled_width = self.q_image.pixmap().width() * zoom
             scaled_height = self.q_image.pixmap().height() * zoom
+
             self.q_image_scene.setSceneRect(0, 0, scaled_width, scaled_height)
+            # Ajusta la posición de la vista para mantener el punto central
+            hbar.setValue(hcenter - self.q_image_view.width() // 2)
+            vbar.setValue(vcenter - self.q_image_view.height() // 2)
+
             self.update_grid()  # Actualiza la cuadrícula
     
     def cb_update_threshold(self):
@@ -402,6 +425,29 @@ class PixelAnnotationApp(QMainWindow):
         self.q_grid = QGraphicsPixmapItem(grid_pixmap)
         self.q_image_scene.addItem(self.q_grid)
         self.q_grid.setZValue(2)  # Asegura que la cuadrícula esté sobre las imágenes
+
+    def get_annotations_image(self, image, layer, all_layers=True, opacity=128):
+        height, width = image.annotations[0].shape
+        highlight = image.annotations[layer]
+
+        # Create a 4-channel image assigning red to the highlight and blue to the others, with 50% transparency
+        combined = np.zeros((height, width, 4), dtype=np.uint8)
+        combined[:, :, 2] = highlight
+        # make pixels in the highlight layer 50% transparent
+        combined[:, :, 3] = highlight
+
+        if all_layers:
+            others = np.zeros((height, width), dtype=np.uint8)
+            others = image.annotations.copy()
+            del others[layer]
+            others = np.max(others, axis=0)
+            combined[:, :, 0] = others
+            combined[:, :, 3] = np.maximum(combined[:, :, 3], others)
+        
+        # set the alpha channel to 255 for non-transparent pixels
+        combined[combined[:, :, 3] > 0, 3] = opacity
+
+        return combined
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

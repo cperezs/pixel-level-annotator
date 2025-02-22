@@ -1,8 +1,6 @@
 import os
 import logging
 import cv2
-from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor
-from PyQt6.QtCore import Qt
 import numpy as np
 from collections import deque
 
@@ -58,42 +56,6 @@ class Image:
         for i in range(nlayers):
             binary_image = np.zeros((self.height, self.width), dtype=np.uint8)
             self.annotations.append(binary_image)
-
-    def get_annotations_pixmap(self, layer, all_layers=True, invert=False):
-        """Returns the annotations as a QPixmap."""
-
-        # Obtener dimensiones de la imagen base
-        height, width = self.annotations[0].shape
-
-        # Crear un QPixmap transparente
-        pixmap = QPixmap(width, height)
-        pixmap.fill(Qt.GlobalColor.transparent)
-
-        painter = QPainter(pixmap)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-
-        for i, img in enumerate(self.annotations):
-            if i == layer or invert:
-                color = (255, 0, 0, 128)
-            else:
-                if not invert and not all_layers:
-                    continue
-                color = (0, 0, 255, 128)
-
-            # Convertir imagen binaria en un QImage de 32 bits con canal alfa
-            qimage = QImage(width, height, QImage.Format.Format_ARGB32)
-            qimage.fill(Qt.GlobalColor.transparent)
-
-            for y in range(height):
-                for x in range(width):
-                    if img[y, x] > 0 or (invert and img[y, x] == 0):  # Si es blanco en la imagen binaria
-                        qimage.setPixelColor(x, y, QColor(*color))
-
-            # Dibujar la imagen en el QPixmap
-            painter.drawImage(0, 0, qimage)
-
-        painter.end()
-        return pixmap
     
     def _save_state(self):
         """Saves the current state of the annotations."""
@@ -137,7 +99,7 @@ class Image:
         height, width = image.shape
         start_color = image[y, x]  # Color del píxel inicial
         visited = np.zeros((height, width), dtype=bool)
-        result = []
+        mask = np.zeros((height, width), np.uint8)  # Máscara con bordes adicionales
         queue = deque([(x, y)])
 
         # Desplazamientos en 8 direcciones (para conectar en diagonal también)
@@ -150,7 +112,7 @@ class Image:
                 continue
             
             visited[cy, cx] = True
-            result.append((cx, cy))
+            mask[cy, cx] = 255
 
             for dx, dy in directions:
                 nx, ny = cx + dx, cy + dy
@@ -158,14 +120,18 @@ class Image:
                     if abs(int(image[ny, nx]) - int(start_color)) <= threshold:
                         queue.append((nx, ny))
 
-        return result
+        return mask
        
     def annotate_similar(self, x, y, layer, threshold):
         """Sets the specified area to 1 in layer."""
         self._save_state()
-        pixels = self._get_adjacent_pixels(x, y, layer, threshold)
-        for px, py in pixels:
-            self.annotate_pixel(px, py, layer, save_state=False)
+        mask = self._get_adjacent_pixels(x, y, layer, threshold)
+        for i, img in enumerate(self.annotations):
+            if i == layer:
+                self.annotations[i] = np.maximum(img, mask)
+            else:
+                # set to 0 in other layers
+                self.annotations[i] = np.minimum(img, 255 - mask)
         self._save_annotations()
 
     def _save_annotations(self):
