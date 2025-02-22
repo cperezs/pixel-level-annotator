@@ -83,7 +83,7 @@ class Image:
         else:
             self._logger.warning("No annotations to undo.")
     
-    def _get_adjacent_pixels(self, x, y, layer, threshold):
+    def _get_adjacent_pixels(self, x, y, layer, threshold, ignore_annotations=False):
         """
         Encuentra todos los píxeles adyacentes con una diferencia de color que no supere el threshold.
 
@@ -103,8 +103,8 @@ class Image:
         queue = deque([(x, y)])
 
         # Desplazamientos en 8 direcciones (para conectar en diagonal también)
-        directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
-        annotated = self.annotations[layer]
+        directions = [(-1, 0), (1, 0), (0, -1), (0, 1) , (-1, -1), (-1, 1), (1, -1), (1, 1)]
+        annotated = self.get_all_annotations_mask(layer) if not ignore_annotations else np.zeros((height, width), np.uint8)
 
         while queue:
             cx, cy = queue.popleft()
@@ -121,6 +121,49 @@ class Image:
                         queue.append((nx, ny))
 
         return mask
+    
+    def annotate_mask(self, mask, layer):
+        """Sets the specified mask to 1 in layer."""
+        self._save_state()
+        # set mask to 255 in all values greater than 0
+        mask[mask > 0] = 255
+        self.annotations[layer] = np.maximum(self.annotations[layer], mask)
+        # remove the annotations from other layers
+        self._remove_mask_from_other_layers(mask, layer)
+        self._save_annotations()
+    
+    def get_other_annotations_mask(self, layer):
+        """Returns the mask with all annotations in all layers."""
+        mask = np.zeros((self.height, self.width), np.uint8)
+        for i, img in enumerate(self.annotations):
+            if i != layer:
+                mask = np.maximum(mask, img)
+        return mask
+
+    def get_all_annotations_mask(self, layer):
+        """Returns the mask with all annotations in all layers."""
+        mask = np.zeros((self.height, self.width), np.uint8)
+        for img in self.annotations:
+            mask = np.maximum(mask, img)
+        return mask
+    
+    def get_unannotated_mask(self, x, y, connected=True):
+        """Returns the mask with all unannotated pixels."""
+        mask = np.zeros((self.height, self.width), np.uint8)
+        for i, img in enumerate(self.annotations):
+            mask = np.maximum(mask, img)
+        mask = 255 - mask
+        if connected:
+            mask = self._get_adjacent_pixels(x, y, 0, threshold=255, ignore_annotations=False)
+        return mask
+    
+    def _remove_mask_from_other_layers(self, mask, layer):
+        """Removes the specified mask from other layers."""
+        # Update other layers
+        inverted_mask = 255 - mask
+        for i in range(len(self.annotations)):
+            if i != layer:
+                self.annotations[i] = np.minimum(self.annotations[i], inverted_mask)
 
     def annotate_similar(self, x, y, layer, threshold):
         """Sets the specified area to 1 in layer."""
@@ -129,14 +172,14 @@ class Image:
 
         # Update the specified layer
         self.annotations[layer] = np.maximum(self.annotations[layer], mask)
-
-        # Update other layers
-        inverted_mask = 255 - mask
-        for i in range(len(self.annotations)):
-            if i != layer:
-                self.annotations[i] = np.minimum(self.annotations[i], inverted_mask)
+        # Remove the mask from other layers
+        self._remove_mask_from_other_layers(mask, layer)
 
         self._save_annotations()
+    
+    def get_similarity_mask(self, x, y, layer, threshold, ignore_annotations=False):
+        """Returns the mask of the specified area."""
+        return self._get_adjacent_pixels(x, y, layer, threshold, ignore_annotations)
 
     def _save_annotations(self):
         """Saves the annotations to separate files."""

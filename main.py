@@ -1,10 +1,12 @@
 import sys
-import os
-from PyQt6.QtWidgets import QApplication, QMainWindow, QListWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QButtonGroup, QCheckBox, QSlider
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QImage, QMouseEvent
-from PyQt6.QtCore import Qt, QPoint
 import logging
 import numpy as np
+
+from PyQt6.QtWidgets import QApplication, QMainWindow, QListWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QButtonGroup, QCheckBox, QSlider, QFrame, QSizePolicy, QToolBar, QSpinBox
+from PyQt6.QtGui import QPixmap, QImage, QMouseEvent
+from PyQt6.QtCore import Qt, QPropertyAnimation
+
+import cv2
 
 logging.basicConfig(level=logging.INFO)
 
@@ -25,9 +27,9 @@ class PixelAnnotationApp(QMainWindow):
               
         # Toolbar
         toolbar_layout = QVBoxLayout()
-        self.q_zoom_in_button = QPushButton("Zoom In (+)")
+        self.q_zoom_in_button = QPushButton("Zoom In")
         self.q_zoom_in_button.clicked.connect(self.cb_zoom_in)
-        self.q_zoom_out_button = QPushButton("Zoom Out (-)")
+        self.q_zoom_out_button = QPushButton("Zoom Out")
         self.q_zoom_out_button.clicked.connect(self.cb_zoom_out)
         self.q_undo_button = QPushButton("Undo (Ctrl+Z)")
         self.q_undo_button.clicked.connect(self.cb_undo)  
@@ -35,8 +37,52 @@ class PixelAnnotationApp(QMainWindow):
         toolbar_layout.addWidget(self.q_zoom_out_button)
         toolbar_layout.addWidget(self.q_undo_button)
 
-        # Threshold selector
-        toolbar_layout.addWidget(QLabel("Threshold"))
+        # Native separator using QToolBar
+        q_separator = QToolBar()
+        q_separator.addSeparator()
+        toolbar_layout.addWidget(q_separator)
+
+        # Tool buttons
+        self.q_tool_group = QButtonGroup(self)
+        self.q_tool_group.setExclusive(True)
+        self.q_pen_button = QPushButton("Pen (p)")
+        self.q_pen_button.setCheckable(True)
+        self.q_pen_button.setChecked(True)
+        self.q_pen_button.setShortcut("p")
+        self.q_pen_button.clicked.connect(lambda: self.cb_select_tool("pen"))
+        self.q_selector_button = QPushButton("Selector (s)")
+        self.q_selector_button.setCheckable(True)
+        self.q_selector_button.setShortcut("s")
+        self.q_selector_button.clicked.connect(lambda: self.cb_select_tool("selector"))
+        self.q_fill_button = QPushButton("Fill (f)")
+        self.q_fill_button.setCheckable(True)
+        self.q_fill_button.setShortcut("f")
+        self.q_fill_button.clicked.connect(lambda: self.cb_select_tool("fill"))
+        self.q_tool_group.addButton(self.q_pen_button)
+        self.q_tool_group.addButton(self.q_selector_button)
+        self.q_tool_group.addButton(self.q_fill_button)
+
+        # Selector ignore annotations
+        self.q_ignore_annotations = QCheckBox("Ignore annotations")
+        self.q_ignore_annotations.setChecked(False)
+        toolbar_layout.addWidget(self.q_ignore_annotations)
+        self.q_ignore_annotations.stateChanged.connect(self.cb_ignore_annotations)
+
+        # Pen tool
+        toolbar_layout.addWidget(self.q_pen_button)
+        self.q_pen_label = QLabel("Pen size")
+        toolbar_layout.addWidget(self.q_pen_label)
+        self.q_pen_spin = QSpinBox()
+        self.q_pen_spin.setMinimum(1)
+        self.q_pen_spin.setMaximum(15)
+        self.q_pen_spin.setValue(1)
+        self.q_pen_spin.valueChanged.connect(self.cb_update_pen_size)
+        toolbar_layout.addWidget(self.q_pen_spin)
+
+        # Threshold selector tool
+        toolbar_layout.addWidget(self.q_selector_button)
+        self.q_threshold_label = QLabel("Threshold")
+        toolbar_layout.addWidget(self.q_threshold_label)
         self.q_threshold_slider = QSlider(Qt.Orientation.Horizontal)
         self.q_threshold_slider.setMinimum(1)
         self.q_threshold_slider.setMaximum(128)
@@ -45,6 +91,20 @@ class PixelAnnotationApp(QMainWindow):
         self.q_threshold_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.q_threshold_slider.valueChanged.connect(self.cb_update_threshold)
         toolbar_layout.addWidget(self.q_threshold_slider)
+
+        # Selector auto-smoothing
+        self.q_autosmooth = QCheckBox("Auto-smooth")
+        self.q_autosmooth.setChecked(True)
+        toolbar_layout.addWidget(self.q_autosmooth)
+        self.q_autosmooth.stateChanged.connect(self.cb_autosmooth)
+
+        # Fill tool
+        toolbar_layout.addWidget(self.q_fill_button)
+
+        # Native separator using QToolBar
+        q_separator = QToolBar()
+        q_separator.addSeparator()
+        toolbar_layout.addWidget(q_separator)
 
         # Layer buttons
         self.q_layer_0_button = QPushButton("background (1)")
@@ -114,6 +174,10 @@ class PixelAnnotationApp(QMainWindow):
         
         self.q_image_scene = QGraphicsScene()
         self.q_image_view.setScene(self.q_image_scene)
+        self.q_image_view.mousePressEvent = self.cb_mouse_press_event
+        self.q_image_view.mouseMoveEvent = self.cb_mouse_move_event
+        self.q_image_view.mouseReleaseEvent = self.cb_mouse_release_event
+        self.q_image_view.setMouseTracking(True)
         self.q_image = None
         self.q_annotations = None
         self.q_grid = None
@@ -136,14 +200,24 @@ class PixelAnnotationApp(QMainWindow):
         
         # Variables de estado
         self.state = {
-            "zoom": 20,
+            "zoom": 10,
             "image": None,
             "selected_layer": 0,
-            "threshold": 32,
             "area_selection_start": None,
             "area_selection_end": None,
             "show_other_layers": True,
             "show_image": True,
+            "mask": None,
+            "pen_tool": True,
+            "pen_tool_drawing": False,
+            "pen_tool_size": 1,
+            "selector_tool": False,
+            "selector_tool_drawing": False,
+            "selector_tool_threshold": 32,
+            "selector_tool_auto_smooth": True,
+            "fill_tool": False,
+            "ignore_annotations": False,
+            "mouse_pos": None
         }
         self.listeners = {
             "zoom": [self.update_image_view],
@@ -151,6 +225,12 @@ class PixelAnnotationApp(QMainWindow):
             "selected_layer": [self.update_image_view],
             "show_other_layers": [self.update_image_view],
             "show_image": [self.update_image_view],
+            "mask": [self.update_mask_view],
+            "pen_tool": [self.tool_change],
+            "selector_tool": [self.tool_change],
+            "mouse_pos": [self.mouse_pos_updated],
+            "selector_tool_threshold": [self.update_threshold],
+            "ignore_annotations": [self.update_ignore_annotations]
         }
 
         self.load_images()
@@ -161,6 +241,9 @@ class PixelAnnotationApp(QMainWindow):
             self.load_image(self.q_image_list.currentItem())
         
         self.showMaximized()
+
+    def cb_select_tool(self, tool):
+        self.set_state({"pen_tool": tool == "pen", "selector_tool": tool == "selector", "fill_tool": tool == "fill"})
 
     def set_state(self, state):
         """Establece el estado de la aplicación."""
@@ -185,19 +268,43 @@ class PixelAnnotationApp(QMainWindow):
             listener()
     
     def cb_key_press_event(self, event):
-        if event.key() == Qt.Key.Key_Space:
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self.q_annotations.setVisible(False)
+            self.set_state({"ignore_annotations": True})
 
     def cb_key_release_event(self, event):
         """Maneja los eventos de teclado para deshacer y hacer zoom."""
         if event.key() == Qt.Key.Key_Z and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-            self.cb_undo()
+            if self.state["pen_tool_drawing"] or self.state["selector_tool_drawing"]:
+                self.cancel_tool()
+            else:
+                self.cb_undo()
         elif event.key() == Qt.Key.Key_Plus:
-            self.cb_zoom_in()
+            #self.cb_zoom_in()
+            if self.state["pen_tool"]:
+                self.update_pen_size(1)
+            elif self.state["selector_tool"]:
+                self.set_state({"selector_tool_threshold": self.state["selector_tool_threshold"] + 1})
         elif event.key() == Qt.Key.Key_Minus:
-            self.cb_zoom_out()
+            #self.cb_zoom_out()
+            if self.state["pen_tool"]:
+                self.update_pen_size(-1)
+            elif self.state["selector_tool"]:
+                self.set_state({"selector_tool_threshold": self.state["selector_tool_threshold"] - 1})
         elif event.key() == Qt.Key.Key_Space:
             self.q_annotations.setVisible(True)
+            self.set_state({"ignore_annotations": False})
+        elif event.key() == Qt.Key.Key_Escape:
+            self.cancel_tool()
+        elif event.key() == Qt.Key.Key_E:
+            if self.state["selector_tool"] and self.state["selector_tool_drawing"]:
+                self.expand_mask()
+        elif event.key() == Qt.Key.Key_R:
+            if self.state["selector_tool"] and self.state["selector_tool_drawing"]:
+                self.shrink_mask()
+        elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
+            if self.state["selector_tool"] and self.state["selector_tool_drawing"]:
+                self.annotate_drawing()
 
     def cb_wheel_event(self, event):
         """Maneja el evento de la rueda del mouse para hacer zoom o desplazarse."""
@@ -245,7 +352,7 @@ class PixelAnnotationApp(QMainWindow):
         
         # Cargar la nueva imagen
         self.q_image = QGraphicsPixmapItem(q_pixmap)
-        zoom = 20
+        zoom = 10
         self.q_image.setScale(zoom)  # Aplica el zoom inicial (20 veces)
         self.q_image.setPos(0, 0)
         self.q_image_scene.addItem(self.q_image)
@@ -262,10 +369,16 @@ class PixelAnnotationApp(QMainWindow):
         self.q_annotations.setScale(zoom)  # Aplica el mismo zoom
         self.q_annotations.setPos(0, 0)
         self.q_image_scene.addItem(self.q_annotations)
-                      
-        # Conectar el evento de clic del mouse
-        self.q_image_view.mousePressEvent = self.cb_mouse_press_event
 
+        # Añade otra imagen para la máscara de selección encima de las anotaciones
+        self.q_selection = QGraphicsPixmapItem()
+        self.q_image_scene.addItem(self.q_selection)
+        self.q_selection.setZValue(1)  # Asegura que la máscara de selección esté sobre las anotaciones
+        self.q_selection.setVisible(False)
+
+        # Create a mask with the size of the image
+        mask = np.zeros((image.height, image.width), dtype=np.uint8)
+                      
         # Estado
         self.annotating = False
         self.start_pixel = None
@@ -274,12 +387,18 @@ class PixelAnnotationApp(QMainWindow):
         self.thresholding = False
         self.q_annotations.setVisible(True)
 
+        # set focus to the image view
+        self.q_image_view.setFocus()
+
         self.set_state({
             "zoom": zoom,
             "image": image,
+            "mask": mask,
             "selected_layer": 0,
             "area_selection_start": None,
             "area_selection_end": None,
+            "pen_tool": True,
+            "selector_tool": False,
         })
     
     def update_image_view(self):
@@ -294,6 +413,7 @@ class PixelAnnotationApp(QMainWindow):
             hcenter = hvalue + self.q_image_view.width() // 2
             vcenter = vvalue + self.q_image_view.height() // 2
 
+            # Show annotations
             image = self.state["image"]
             selected_layer = self.state["selected_layer"]
             show_other_layers = self.state["show_other_layers"]
@@ -305,6 +425,7 @@ class PixelAnnotationApp(QMainWindow):
             q_annotations_pixmap = QPixmap.fromImage(qimage)
             self.q_annotations.setPixmap(q_annotations_pixmap)
 
+            # Show progress
             progress = image.get_progress()
             self.q_progress_bar.setText(f"{progress}%")
 
@@ -312,9 +433,10 @@ class PixelAnnotationApp(QMainWindow):
             self.q_image.setScale(zoom)  # Aplica el nuevo zoom
             self.q_image.setVisible(show_image)
             self.q_annotations.setScale(zoom)  # Aplica el mismo zoom a las anotaciones
+            self.q_selection.setScale(zoom)  # Aplica el mismo zoom a la máscara de selección
+
             scaled_width = self.q_image.pixmap().width() * zoom
             scaled_height = self.q_image.pixmap().height() * zoom
-
             self.q_image_scene.setSceneRect(0, 0, scaled_width, scaled_height)
             # Ajusta la posición de la vista para mantener el punto central
             hbar.setValue(hcenter - self.q_image_view.width() // 2)
@@ -322,10 +444,31 @@ class PixelAnnotationApp(QMainWindow):
 
             self.update_grid()  # Actualiza la cuadrícula
     
+    def update_mask_view(self):
+        # Show mask
+        mask = self.state["mask"]
+        if mask is not None:
+            _, width = mask.shape[:2]
+            bytes_per_line = width * 4
+            mask_img = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
+            mask_img[:, :, :3] = mask[:, :, None]
+            mask_img[:, :, 3] = mask * 0.75 # Set opacity to 50%
+            qmask = QImage(mask_img.data, mask.shape[1], mask.shape[0], bytes_per_line, QImage.Format.Format_ARGB32)
+            qmask_pixmap = QPixmap.fromImage(qmask)
+            self.q_selection.setPixmap(qmask_pixmap)
+            self.q_selection.setScale(self.state["zoom"])
+            self.q_selection.setPos(0, 0)
+            self.q_selection.setVisible(True)
+        else:
+            self.q_selection.setVisible(False)
+    
+    def cb_update_pen_size(self):
+        self.set_state({"pen_tool_size": self.q_pen_spin.value()})
+
     def cb_update_threshold(self):
         """Establece el umbral para seleccionar los píxeles más cercanos."""
         value = self.q_threshold_slider.value()
-        self.set_state({"threshold": value})
+        self.set_state({"selector_tool_threshold": value})
     
     def cb_mouse_press_event(self, event: QMouseEvent):
         """Maneja el evento de clic del mouse para anotar píxeles."""
@@ -343,12 +486,32 @@ class PixelAnnotationApp(QMainWindow):
 
         if event.button() == Qt.MouseButton.LeftButton and image:
             # Anotar el píxel en la capa seleccionada
-            image.annotate_pixel(pixel_x, pixel_y, selected_layer)
-            self.set_state({"image": image})
-        elif event.button() == Qt.MouseButton.RightButton:
-            threshold = self.state["threshold"]
-            image.annotate_similar(pixel_x, pixel_y, selected_layer, threshold)
-            self.set_state({"image": image})
+            #image.annotate_pixel(pixel_x, pixel_y, selected_layer)
+            #self.set_state({"image": image})
+            if self.state["pen_tool"]:
+                self.set_state({"pen_tool_drawing": True})
+            elif self.state["selector_tool"]:
+                self.set_state({"selector_tool_drawing": True, "selector_tool_position": (pixel_x, pixel_y)})
+                self.mask_selection(pixel_x, pixel_y, selected_layer)
+            elif self.state["fill_tool"]:
+                self.fill(pixel_x, pixel_y, selected_layer)
+    
+    def cb_mouse_release_event(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.state["pen_tool"] and self.state["pen_tool_drawing"]:
+                self.annotate_drawing()
+                self.set_state({"pen_tool_drawing": False})
+
+    def cb_mouse_move_event(self, event: QMouseEvent):
+        # Get the position of the mouse in the scene
+        scene_pos = self.q_image_view.mapToScene(event.pos())
+        
+        # Convert the position to pixel coordinates in the original image
+        zoom = self.state["zoom"]
+        pixel_x = int(scene_pos.x() / zoom)
+        pixel_y = int(scene_pos.y() / zoom)
+        self._logger.info("Mouse move: (%d, %d)", pixel_x, pixel_y)
+        self.set_state({"mouse_pos": (pixel_x, pixel_y)})
     
     def cb_toggle_other_layers(self):
         """Activa o desactiva el selector de vecinos."""
@@ -438,6 +601,153 @@ class PixelAnnotationApp(QMainWindow):
         combined[combined[:, :, 3] > 0, 3] = opacity
 
         return combined
+
+    def mask_selection(self, x, y, layer):
+        """Selecciona los píxeles adyacentes a la posición especificada."""
+        image = self.state["image"]
+        threshold = self.state["selector_tool_threshold"]
+        ignore_annotations = self.state["ignore_annotations"]
+        mask = image.get_similarity_mask(x, y, layer, threshold, ignore_annotations)
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        if self.state["selector_tool_auto_smooth"]:
+            mask = cv2.dilate(mask, kernel, iterations=1)
+            mask = cv2.erode(mask, kernel, iterations=1)
+        self.set_state({"mask": mask})
+    
+    def tool_change(self):
+        pen  = self.state["pen_tool"]
+        selector = self.state["selector_tool"]
+
+        if pen:
+            self.q_pen_button.setChecked(True)
+            self.q_pen_label.setEnabled(True)
+            self.q_pen_spin.setEnabled(True)
+        elif selector:
+            self.q_pen_label.setEnabled(False)
+            self.q_pen_spin.setEnabled(False)
+
+        if selector:
+            self.q_selector_button.setChecked(True)
+            self.q_threshold_label.setEnabled(True)
+            self.q_threshold_slider.setEnabled(True)
+            self.q_autosmooth.setEnabled(True)
+        else:
+            self.q_threshold_label.setEnabled(False)
+            self.q_threshold_slider.setEnabled(False)
+            self.q_autosmooth.setEnabled(False)
+
+        mask = np.zeros_like(self.state["mask"])
+        self.set_state({"mask": mask})
+        self.mouse_pos_updated()
+
+    def annotate_drawing(self):
+        """Annotate the drawing in the mask."""
+        mask = self.state["mask"]
+        image = self.state["image"]
+        layer = self.state["selected_layer"]
+        if not self.state["ignore_annotations"]:
+            annotated = image.get_other_annotations_mask(layer)
+            mask = cv2.bitwise_and(mask, cv2.bitwise_not(annotated))
+        image.annotate_mask(mask, layer)
+        mask = np.zeros_like(mask)
+        self.set_state({"mask": mask, "image": image})
+    
+    def update_pen_size(self, delta):
+        """Update the pen size."""
+        size = self.state["pen_tool_size"]
+        size = max(1, size + delta)
+        self.set_state({"pen_tool_size": size})
+        self.q_pen_spin.setValue(size)
+        self.mouse_pos_updated()
+    
+    def cancel_tool(self):
+        mask = np.zeros_like(self.state["mask"])
+        self.set_state({"mask": mask, "pen_tool_drawing": False, "selector_tool_drawing": False})
+    
+    def mouse_pos_updated(self):
+        """Update the mouse position."""
+        pos = self.state.get("mouse_pos")
+        if pos is None:
+            return
+        
+        pixel_x, pixel_y = pos
+
+        if self.state["pen_tool"] and not self.state["pen_tool_drawing"]:
+            mask = np.zeros((self.state["image"].height, self.state["image"].width), dtype=np.uint8)
+            # set mask to a square of size pen_tool_size with the top-left corner at (pixel_x, pixel_y)
+            size = self.state["pen_tool_size"] 
+            mask[pixel_y:pixel_y+size, pixel_x:pixel_x+size] = 225
+            self.set_state({"mask": mask})
+        elif self.state["pen_tool"] and self.state["pen_tool_drawing"]:
+            mask = self.state["mask"]
+            size = self.state["pen_tool_size"] 
+            mask[pixel_y:pixel_y+size, pixel_x:pixel_x+size] = 255
+            if not self.state["ignore_annotations"]:
+                annotated = self.state["image"].get_other_annotations_mask(self.state["selected_layer"])
+                mask = cv2.bitwise_and(mask, cv2.bitwise_not(annotated))
+            self.set_state({"mask": mask})
+    
+    def update_threshold(self):
+        """Update the threshold for the selector tool."""
+        threshold = self.state["selector_tool_threshold"]
+        self.q_threshold_slider.setValue(threshold)
+        if self.state["selector_tool_drawing"]:
+            pixel_x, pixel_y = self.state["selector_tool_position"]
+            selected_layer = self.state["selected_layer"]
+            self.mask_selection(pixel_x, pixel_y, selected_layer)
+    
+    def expand_mask(self):
+        """
+        Expande la máscara binaria haciendo crecer los píxeles con valor 255 a los píxeles adyacentes.
+
+        :param mask: numpy.ndarray de forma (alto, ancho) con valores 0 y 255.
+        :return: Máscara expandida, donde cada píxel 255 se ha extendido a sus vecinos.
+        """
+        mask = self.state["mask"]
+        # Definir un kernel de 3x3 (vecindario inmediato)
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        # Aplicar la dilatación: cada píxel 255 "crece" a los píxeles vecinos
+        mask = cv2.dilate(mask, kernel, iterations=1)
+        if not self.state["ignore_annotations"]:
+            annotated = self.state["image"].get_other_annotations_mask(self.state["selected_layer"])
+            # Eliminar los píxeles que coinciden con las anotaciones
+            mask = cv2.bitwise_and(mask, cv2.bitwise_not(annotated))
+            
+        self.set_state({"mask": mask})
+    
+    def shrink_mask(self):
+        """
+        Reduce la máscara binaria haciendo decrecer los píxeles con valor 255 a los píxeles adyacentes.
+
+        :param mask: numpy.ndarray de forma (alto, ancho) con valores 0 y 255.
+        :return: Máscara reducida, donde cada píxel 255 se ha reducido a sus vecinos.
+        """
+        mask = self.state["mask"]
+        # Definir un kernel de 3x3 (vecindario inmediato)
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        # Aplicar la erosión: cada píxel 255 "encoge" a los píxeles vecinos
+        mask = cv2.erode(mask, kernel, iterations=1)
+        self.set_state({"mask": mask})
+    
+    def cb_autosmooth(self):
+        """Toggle auto-smoothing for the selector tool."""
+        self.set_state({"selector_tool_auto_smooth": self.q_autosmooth.isChecked()})
+
+    def cb_ignore_annotations(self):
+        """Toggle ignoring annotations for the selector tool."""
+        self.set_state({"ignore_annotations": self.q_ignore_annotations.isChecked()})
+    
+    def update_ignore_annotations(self):
+        ignore = self.state["ignore_annotations"]
+        self.q_ignore_annotations.setChecked(ignore)
+        self.mouse_pos_updated()
+    
+    def fill(self, x, y, layer):
+        """Fill the selected area with the selected layer."""
+        image = self.state["image"]
+        mask = image.get_unannotated_mask(x, y)
+        image.annotate_mask(mask, layer)
+        self.set_state({"image": image})
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
