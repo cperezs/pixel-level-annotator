@@ -91,7 +91,7 @@ class Image:
         :param x: Coordenada X del píxel inicial.
         :param y: Coordenada Y del píxel inicial.
         :param threshold: Umbral de diferencia de color permitido.
-        :return: Lista de coordenadas [(x1, y1), (x2, y2), ...] de píxeles conectados.
+        :return: Máscara binaria con los píxeles conectados.
         """
         # Asegurar que la imagen está en formato correcto (convertir a escala de grises si es necesario)
         image = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
@@ -103,14 +103,14 @@ class Image:
         queue = deque([(x, y)])
 
         # Desplazamientos en 8 direcciones (para conectar en diagonal también)
-        directions = [(-1, 0), (1, 0), (0, -1), (0, 1)] # , (-1, -1), (-1, 1), (1, -1), (1, 1)]
+        directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
         annotated = self.annotations[layer]
 
         while queue:
             cx, cy = queue.popleft()
             if visited[cy, cx] or annotated[cy, cx]:
                 continue
-            
+
             visited[cy, cx] = True
             mask[cy, cx] = 255
 
@@ -121,17 +121,21 @@ class Image:
                         queue.append((nx, ny))
 
         return mask
-       
+
     def annotate_similar(self, x, y, layer, threshold):
         """Sets the specified area to 1 in layer."""
         self._save_state()
         mask = self._get_adjacent_pixels(x, y, layer, threshold)
-        for i, img in enumerate(self.annotations):
-            if i == layer:
-                self.annotations[i] = np.maximum(img, mask)
-            else:
-                # set to 0 in other layers
-                self.annotations[i] = np.minimum(img, 255 - mask)
+
+        # Update the specified layer
+        self.annotations[layer] = np.maximum(self.annotations[layer], mask)
+
+        # Update other layers
+        inverted_mask = 255 - mask
+        for i in range(len(self.annotations)):
+            if i != layer:
+                self.annotations[i] = np.minimum(self.annotations[i], inverted_mask)
+
         self._save_annotations()
 
     def _save_annotations(self):
@@ -145,12 +149,10 @@ class Image:
     
     def get_progress(self):
         """Returns the percentage of annotated pixels."""
-        combined_annotations = np.zeros((self.height, self.width), dtype=np.uint8)
-        for img in self.annotations:
-            combined_annotations = np.maximum(combined_annotations, img)
+        combined_annotations = np.any(self.annotations, axis=0).astype(np.uint8) * 255
         total_pixels = self.height * self.width
         annotated_pixels = np.count_nonzero(combined_annotations)
         percentage = int(annotated_pixels / total_pixels * 100)
-        if percentage == 100  and annotated_pixels < total_pixels:
+        if percentage == 100 and annotated_pixels < total_pixels:
             percentage = 99
         return percentage

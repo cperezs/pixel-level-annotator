@@ -285,7 +285,7 @@ class PixelAnnotationApp(QMainWindow):
     def update_image_view(self):
         """Actualiza la vista de la imagen."""
         if self.state["image"]:
-            # obtiene la posición de la parte  visible de la imagen
+            # obtiene la posición de la parte visible de la imagen
             hbar = self.q_image_view.horizontalScrollBar()
             vbar = self.q_image_view.verticalScrollBar()
             hvalue = hbar.value()
@@ -301,7 +301,7 @@ class PixelAnnotationApp(QMainWindow):
             ann_img = self.get_annotations_image(image, selected_layer, show_other_layers)
             alto, ancho = ann_img.shape[:2]
             bytes_per_line = ancho * 4
-            qimage = QImage(ann_img, ancho, alto, bytes_per_line, QImage.Format.Format_ARGB32)
+            qimage = QImage(ann_img.data, ancho, alto, bytes_per_line, QImage.Format.Format_ARGB32)
             q_annotations_pixmap = QPixmap.fromImage(qimage)
             self.q_annotations.setPixmap(q_annotations_pixmap)
 
@@ -386,41 +386,35 @@ class PixelAnnotationApp(QMainWindow):
         """Dibuja una cuadrícula sobre la imagen."""
         if not self.q_image:
             return
-        
+
         pixmap = self.q_image.pixmap()
         if pixmap.isNull():
             return
-        
+
         # Calcula el tamaño escalado de la imagen
         zoom = self.state["zoom"]
         width = int(pixmap.width() * zoom)
         height = int(pixmap.height() * zoom)
-        
+
         if width <= 0 or height <= 0:
             return
-        
-        # Crea un QPixmap para la cuadrícula
-        grid_pixmap = QPixmap(width, height)
-        grid_pixmap.fill(Qt.GlobalColor.transparent)
-        
-        painter = QPainter(grid_pixmap)
-        if painter.isActive():  # Verifica si el painter está activo
-            pen = QPen(QColor("gray"))
-            pen.setWidth(1)
-            painter.setPen(pen)
-            
-            # Dibuja la cuadrícula
-            for x in range(0, width, zoom):
-                painter.drawLine(x, 0, x, height)
-            for y in range(0, height, zoom):
-                painter.drawLine(0, y, width, y)
-            
-            painter.end()
-        
+
+        # Crear una cuadrícula usando NumPy
+        grid = np.zeros((height, width, 4), dtype=np.uint8)
+        grid[..., 3] = 0  # Establecer el canal alfa a 0 (completamente transparente)
+        grid[::zoom, :, :3] = 128  # Líneas horizontales grises
+        grid[:, ::zoom, :3] = 128  # Líneas verticales grises
+        grid[::zoom, :, 3] = 255  # Establecer el canal alfa a 255 (completamente opaco) para las líneas horizontales
+        grid[:, ::zoom, 3] = 255  # Establecer el canal alfa a 255 (completamente opaco) para las líneas verticales
+
+        # Convertir la cuadrícula a QPixmap
+        qimage = QImage(grid.data, width, height, QImage.Format.Format_RGBA8888)
+        grid_pixmap = QPixmap.fromImage(qimage)
+
         # Elimina la cuadrícula anterior si existe
         if self.q_grid:
             self.q_image_scene.removeItem(self.q_grid)
-        
+
         # Añade la nueva cuadrícula
         self.q_grid = QGraphicsPixmapItem(grid_pixmap)
         self.q_image_scene.addItem(self.q_grid)
@@ -433,18 +427,14 @@ class PixelAnnotationApp(QMainWindow):
         # Create a 4-channel image assigning red to the highlight and blue to the others, with 50% transparency
         combined = np.zeros((height, width, 4), dtype=np.uint8)
         combined[:, :, 2] = highlight
-        # make pixels in the highlight layer 50% transparent
         combined[:, :, 3] = highlight
 
         if all_layers:
-            others = np.zeros((height, width), dtype=np.uint8)
-            others = image.annotations.copy()
-            del others[layer]
-            others = np.max(others, axis=0)
+            others = np.max(np.stack([image.annotations[i] for i in range(len(image.annotations)) if i != layer]), axis=0)
             combined[:, :, 0] = others
             combined[:, :, 3] = np.maximum(combined[:, :, 3], others)
-        
-        # set the alpha channel to 255 for non-transparent pixels
+
+        # Set the alpha channel to the specified opacity for non-transparent pixels
         combined[combined[:, :, 3] > 0, 3] = opacity
 
         return combined
