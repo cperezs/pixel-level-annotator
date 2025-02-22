@@ -149,6 +149,12 @@ class PixelAnnotationApp(QMainWindow):
         self.q_other_layers.setShortcut("o")
         self.q_other_layers.stateChanged.connect(self.cb_toggle_other_layers)
 
+        # Show missing pixels
+        self.q_missing_pixels_check = QCheckBox("Show missing pixels")
+        self.q_missing_pixels_check.setChecked(False)
+        self.q_missing_pixels_check.stateChanged.connect(self.cb_show_missing_pixels)
+        toolbar_layout.addWidget(self.q_missing_pixels_check)
+
         toolbar_layout.addWidget(self.q_show_image)
         toolbar_layout.addWidget(self.q_other_layers)
         toolbar_layout.addWidget(self.q_layer_0_button)
@@ -180,6 +186,7 @@ class PixelAnnotationApp(QMainWindow):
         self.q_image_view.setMouseTracking(True)
         self.q_image = None
         self.q_annotations = None
+        self.q_missing_pixels = None
         self.q_grid = None
         
         image_layout = QVBoxLayout()
@@ -217,7 +224,8 @@ class PixelAnnotationApp(QMainWindow):
             "selector_tool_auto_smooth": True,
             "fill_tool": False,
             "ignore_annotations": False,
-            "mouse_pos": None
+            "mouse_pos": None,
+            "show_missing_pixels": False
         }
         self.listeners = {
             "zoom": [self.update_image_view],
@@ -230,7 +238,8 @@ class PixelAnnotationApp(QMainWindow):
             "selector_tool": [self.tool_change],
             "mouse_pos": [self.mouse_pos_updated],
             "selector_tool_threshold": [self.update_threshold],
-            "ignore_annotations": [self.update_ignore_annotations]
+            "ignore_annotations": [self.update_ignore_annotations],
+            "show_missing_pixels": [self.update_image_view]
         }
 
         self.load_images()
@@ -348,6 +357,8 @@ class PixelAnnotationApp(QMainWindow):
         self.q_image_scene.clear()
         self.q_image = None
         self.q_annotations = None
+        self.q_selection = None
+        self.q_missing_pixels = None
         self.q_grid = None
         
         # Cargar la nueva imagen
@@ -375,6 +386,12 @@ class PixelAnnotationApp(QMainWindow):
         self.q_image_scene.addItem(self.q_selection)
         self.q_selection.setZValue(1)  # Asegura que la máscara de selección esté sobre las anotaciones
         self.q_selection.setVisible(False)
+
+        # Añade otra imagen para los píxeles faltantes
+        self.q_missing_pixels = QGraphicsPixmapItem()
+        self.q_image_scene.addItem(self.q_missing_pixels)
+        self.q_missing_pixels.setZValue(3)  # Asegura que los píxeles faltantes estén sobre las anotaciones
+        self.q_missing_pixels.setVisible(False)
 
         # Create a mask with the size of the image
         mask = np.zeros((image.height, image.width), dtype=np.uint8)
@@ -424,6 +441,23 @@ class PixelAnnotationApp(QMainWindow):
             qimage = QImage(ann_img.data, ancho, alto, bytes_per_line, QImage.Format.Format_ARGB32)
             q_annotations_pixmap = QPixmap.fromImage(qimage)
             self.q_annotations.setPixmap(q_annotations_pixmap)
+
+            # Show missing pixels
+            if self.state["show_missing_pixels"]:
+                self._logger.info("Showing missing pixels")
+                missing = image.get_missing_annotations_mask()
+                missing_img = np.zeros((missing.shape[0], missing.shape[1], 4), dtype=np.uint8)
+                # fill the missing pixels with red
+                missing_img[:, :, 2] = missing
+                missing_img[:, :, 3] = missing * 255
+                qmissing = QImage(missing_img.data, missing.shape[1], missing.shape[0], bytes_per_line, QImage.Format.Format_RGBA8888)
+                qmissing_pixmap = QPixmap.fromImage(qmissing)
+                self.q_missing_pixels.setPixmap(qmissing_pixmap)
+                self.q_missing_pixels.setScale(self.state["zoom"])
+                self.q_missing_pixels.setPos(0, 0)
+                self.q_missing_pixels.setVisible(True)
+            else:
+                self.q_missing_pixels.setVisible(False)
 
             # Show progress
             progress = image.get_progress()
@@ -748,6 +782,10 @@ class PixelAnnotationApp(QMainWindow):
         mask = image.get_unannotated_mask(x, y)
         image.annotate_mask(mask, layer)
         self.set_state({"image": image})
+    
+    def cb_show_missing_pixels(self):
+        """Show or hide missing pixels."""
+        self.set_state({"show_missing_pixels": self.q_missing_pixels_check.isChecked()})
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

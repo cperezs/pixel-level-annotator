@@ -140,13 +140,20 @@ class Image:
                 mask = np.maximum(mask, img)
         return mask
 
-    def get_all_annotations_mask(self, layer):
+    def get_all_annotations_mask(self):
         """Returns the mask with all annotations in all layers."""
         mask = np.zeros((self.height, self.width), np.uint8)
         for img in self.annotations:
             mask = np.maximum(mask, img)
         return mask
     
+    def get_missing_annotations_mask(self):
+        """Returns the mask with all missing annotations."""
+        mask = np.zeros((self.height, self.width), np.uint8)
+        annotations = self.get_all_annotations_mask()
+        mask = 255 - annotations
+        return mask
+        
     def get_unannotated_mask(self, x, y, connected=True):
         """Returns the mask with all unannotated pixels."""
         mask = np.zeros((self.height, self.width), np.uint8)
