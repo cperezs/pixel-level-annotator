@@ -516,9 +516,6 @@ class PixelAnnotationApp(QMainWindow):
         selected_layer = self.state["selected_layer"]
 
         if event.button() == Qt.MouseButton.LeftButton and image:
-            # Anotar el píxel en la capa seleccionada
-            #image.annotate_pixel(pixel_x, pixel_y, selected_layer)
-            #self.set_state({"image": image})
             if self.state["pen_tool"]:
                 self.set_state({"pen_tool_drawing": True})
             elif self.state["selector_tool"]:

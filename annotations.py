@@ -33,8 +33,7 @@ class Image:
         self.image = cv2.imread(self.filename)
         self.height, self.width, self.channels = self.image.shape
         self._load_annotations(nlayers)
-        self._save_annotations()
-        self._saved_states = deque(maxlen=10)
+        self._saved_states = deque(maxlen=20)
         self._logger.info("Image loaded: %s", self.filename)
     
     def _load_annotations(self, nlayers):
@@ -50,12 +49,10 @@ class Image:
                 break
         if len(self.annotations) < nlayers:
             self._init_annotations(nlayers)
+            self._save_annotations()
 
     def _init_annotations(self, nlayers):
-        self.annotations = []
-        for i in range(nlayers):
-            binary_image = np.zeros((self.height, self.width), dtype=np.uint8)
-            self.annotations.append(binary_image)
+        self.annotations = np.zeros((nlayers, self.height, self.width), dtype=np.uint8)
     
     def _save_state(self):
         """Saves the current state of the annotations."""
@@ -63,17 +60,6 @@ class Image:
         for img in self.annotations:
             saved_annotations.append(img.copy())
         self._saved_states.append(saved_annotations)
-
-    def annotate_pixel(self, x, y, layer, save_state=True):
-        """Sets the specified pixel to white in layer."""
-        if save_state:
-            self._save_state()
-        self.annotations[layer][y, x] = 255
-        for i, img in enumerate(self.annotations):
-            if i != layer:
-                img[y, x] = 0
-        if save_state:
-            self._save_annotations()
     
     def undo(self):
         """Restores the previous state of the annotations."""
@@ -125,52 +111,42 @@ class Image:
     def annotate_mask(self, mask, layer):
         """Sets the specified mask to 1 in layer."""
         self._save_state()
-        # set mask to 255 in all values greater than 0
+        # set mask to 255 in all values greater than 0, just in case the mask is not binary
         mask[mask > 0] = 255
         self.annotations[layer] = np.maximum(self.annotations[layer], mask)
         # remove the annotations from other layers
-        self._remove_mask_from_other_layers(mask, layer)
+        self._remove_mask_from_other_layers(layer)
         self._save_annotations()
     
     def get_other_annotations_mask(self, layer):
-        """Returns the mask with all annotations in all layers."""
-        mask = np.zeros((self.height, self.width), np.uint8)
-        for i, img in enumerate(self.annotations):
-            if i != layer:
-                mask = np.maximum(mask, img)
+        """Returns the mask with all annotations in all other layers."""
+        mask = np.delete(self.annotations, layer, axis=0)
+        mask = np.bitwise_or.reduce(mask, axis=0)
         return mask
 
     def get_all_annotations_mask(self):
         """Returns the mask with all annotations in all layers."""
-        mask = np.zeros((self.height, self.width), np.uint8)
-        for img in self.annotations:
-            mask = np.maximum(mask, img)
-        return mask
+        return np.bitwise_or.reduce(self.annotations, axis=0)
     
     def get_missing_annotations_mask(self):
         """Returns the mask with all missing annotations."""
-        mask = np.zeros((self.height, self.width), np.uint8)
-        annotations = self.get_all_annotations_mask()
-        mask[annotations == 0] = 255
-        return mask
+        mask = self.get_all_annotations_mask()
+        return np.bitwise_not(mask)
         
     def get_unannotated_mask(self, x, y, connected=True):
         """Returns the mask with all unannotated pixels."""
-        mask = np.zeros((self.height, self.width), np.uint8)
-        for i, img in enumerate(self.annotations):
-            mask = np.maximum(mask, img)
-        mask = 255 - mask
         if connected:
-            mask = self._get_adjacent_pixels(x, y, 0, threshold=255, ignore_annotations=False)
-        return mask
+            return self._get_adjacent_pixels(x, y, 0, threshold=255, ignore_annotations=False)
+        else:
+            return self.get_missing_annotations_mask()
     
-    def _remove_mask_from_other_layers(self, mask, layer):
+    def _remove_mask_from_other_layers(self, layer):
         """Removes the specified mask from other layers."""
         # Update other layers
-        inverted_mask = 255 - mask
+        mask = np.bitwise_not(self.annotations[layer])
         for i in range(len(self.annotations)):
             if i != layer:
-                self.annotations[i] = np.minimum(self.annotations[i], inverted_mask)
+                self.annotations[i] = np.bitwise_and(self.annotations[i], mask)
 
     def annotate_similar(self, x, y, layer, threshold):
         """Sets the specified area to 1 in layer."""
@@ -180,7 +156,7 @@ class Image:
         # Update the specified layer
         self.annotations[layer] = np.maximum(self.annotations[layer], mask)
         # Remove the mask from other layers
-        self._remove_mask_from_other_layers(mask, layer)
+        self._remove_mask_from_other_layers(layer)
 
         self._save_annotations()
     
