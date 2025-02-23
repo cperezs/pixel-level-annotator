@@ -1,3 +1,4 @@
+import os
 import sys
 import logging
 import numpy as np
@@ -106,34 +107,22 @@ class PixelAnnotationApp(QMainWindow):
         q_separator.addSeparator()
         toolbar_layout.addWidget(q_separator)
 
-        # Layer buttons
-        self.q_layer_0_button = QPushButton("background (1)")
-        self.q_layer_0_button.clicked.connect(lambda: self.cb_select_layer(0))
-        self.q_layer_0_button.setShortcut("1")
-        self.q_layer_1_button = QPushButton("staff (2)")
-        self.q_layer_1_button.clicked.connect(lambda: self.cb_select_layer(1))
-        self.q_layer_1_button.setShortcut("2")
-        self.q_layer_2_button = QPushButton("notes (3)")
-        self.q_layer_2_button.clicked.connect(lambda: self.cb_select_layer(2))
-        self.q_layer_2_button.setShortcut("3")
-        self.q_layer_3_button = QPushButton("lyrics (4)")
-        self.q_layer_3_button.clicked.connect(lambda: self.cb_select_layer(3))
-        self.q_layer_3_button.setShortcut("4")
-
         # Crear un grupo de botones exclusivos
         self.q_button_group = QButtonGroup(self)
         self.q_button_group.setExclusive(True)
 
-        # Agregar botones al grupo
-        self.q_button_group.addButton(self.q_layer_0_button)
-        self.q_button_group.addButton(self.q_layer_1_button)
-        self.q_button_group.addButton(self.q_layer_2_button)
-        self.q_button_group.addButton(self.q_layer_3_button)
-
-        # Habilitar el comportamiento tipo "toggle"
-        for button in self.q_button_group.buttons():
+        # Layer buttons
+        with open("layers.txt", "r") as f:
+            layers = f.read().splitlines()
+        self.q_layer_buttons = []
+        for i, layer in enumerate(layers):
+            button = QPushButton(f"{layer} ({i + 1})")
             button.setCheckable(True)
-        self.q_layer_0_button.setChecked(True)
+            button.clicked.connect(lambda: self.cb_select_layer(i))
+            button.setShortcut(str(i + 1))
+            self.q_layer_buttons.append(button)
+            self.q_button_group.addButton(button)
+        self.q_layer_buttons[0].setChecked(True)
 
         toolbar_layout.addWidget(QLabel("Layers"))
 
@@ -157,10 +146,8 @@ class PixelAnnotationApp(QMainWindow):
 
         toolbar_layout.addWidget(self.q_show_image)
         toolbar_layout.addWidget(self.q_other_layers)
-        toolbar_layout.addWidget(self.q_layer_0_button)
-        toolbar_layout.addWidget(self.q_layer_1_button)
-        toolbar_layout.addWidget(self.q_layer_2_button)
-        toolbar_layout.addWidget(self.q_layer_3_button)
+        for button in self.q_layer_buttons:
+            toolbar_layout.addWidget(button)
 
         # Sidebar
         side_layout = QVBoxLayout()
@@ -787,7 +774,20 @@ class PixelAnnotationApp(QMainWindow):
         """Show or hide missing pixels."""
         self.set_state({"show_missing_pixels": self.q_missing_pixels_check.isChecked()})
 
+def make_layers_file():
+    layers = ["background", "staff", "notes", "lyrics"]
+    layers_file = "layers.txt"
+    with open(layers_file, "w") as file:
+        for layer in layers:
+            file.write(f"{layer}\n")
+
+def check_layers_file():
+    layers_file = "layers.txt"
+    if not os.path.exists(layers_file) or os.stat(layers_file).st_size == 0:
+        make_layers_file()
+
 if __name__ == "__main__":
+    check_layers_file()
     app = QApplication(sys.argv)
     window = PixelAnnotationApp()
     window.show()

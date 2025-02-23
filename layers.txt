@@ -1,0 +1,4 @@
+background
+staff
+notes
+lyrics
