@@ -151,7 +151,7 @@ class Image:
         """Returns the mask with all missing annotations."""
         mask = np.zeros((self.height, self.width), np.uint8)
         annotations = self.get_all_annotations_mask()
-        mask[annotations]
+        mask[annotations == 0] = 255
         return mask
         
     def get_unannotated_mask(self, x, y, connected=True):

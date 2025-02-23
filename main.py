@@ -145,8 +145,9 @@ class PixelAnnotationApp(QMainWindow):
         self.q_other_layers.stateChanged.connect(self.cb_toggle_other_layers)
 
         # Show missing pixels
-        self.q_missing_pixels_check = QCheckBox("Show missing pixels")
+        self.q_missing_pixels_check = QCheckBox("Show missing pixels (m)")
         self.q_missing_pixels_check.setChecked(False)
+        self.q_missing_pixels_check.setShortcut("m")
         self.q_missing_pixels_check.stateChanged.connect(self.cb_show_missing_pixels)
         toolbar_layout.addWidget(self.q_missing_pixels_check)
 
@@ -384,13 +385,13 @@ class PixelAnnotationApp(QMainWindow):
         # Añade otra imagen para la máscara de selección encima de las anotaciones
         self.q_selection = QGraphicsPixmapItem()
         self.q_image_scene.addItem(self.q_selection)
-        self.q_selection.setZValue(1)  # Asegura que la máscara de selección esté sobre las anotaciones
+        self.q_selection.setZValue(2)  # Asegura que la máscara de selección esté sobre las anotaciones
         self.q_selection.setVisible(False)
 
         # Añade otra imagen para los píxeles faltantes
         self.q_missing_pixels = QGraphicsPixmapItem()
         self.q_image_scene.addItem(self.q_missing_pixels)
-        self.q_missing_pixels.setZValue(2)  # Asegura que los píxeles faltantes estén sobre las anotaciones
+        self.q_missing_pixels.setZValue(1)  # Asegura que los píxeles faltantes estén sobre las anotaciones
         self.q_missing_pixels.setVisible(False)
 
         # Create a mask with the size of the image
