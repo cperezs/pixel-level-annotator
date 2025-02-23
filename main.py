@@ -101,6 +101,10 @@ class PixelAnnotationApp(QMainWindow):
 
         # Fill tool
         toolbar_layout.addWidget(self.q_fill_button)
+        self.q_fill_all = QCheckBox("Fill all regions")
+        self.q_fill_all.setChecked(False)
+        self.q_fill_all.stateChanged.connect(lambda: self.set_state({"fill_all": self.q_fill_all.isChecked()}))
+        toolbar_layout.addWidget(self.q_fill_all)
 
         # Native separator using QToolBar
         q_separator = QToolBar()
@@ -215,7 +219,8 @@ class PixelAnnotationApp(QMainWindow):
             "fill_tool": False,
             "ignore_annotations": False,
             "mouse_pos": None,
-            "show_missing_pixels": False
+            "show_missing_pixels": False,
+            "fill_all": False
         }
         self.listeners = {
             "zoom": [self.update_image_view],
@@ -771,7 +776,8 @@ class PixelAnnotationApp(QMainWindow):
     def fill(self, x, y, layer):
         """Fill the selected area with the selected layer."""
         image = self.state["image"]
-        mask = image.get_unannotated_mask(x, y)
+        fill_all = self.state["fill_all"]
+        mask = image.get_unannotated_mask(x, y, connected=not fill_all)
         image.annotate_mask(mask, layer)
         self.set_state({"image": image})
     
