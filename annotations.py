@@ -21,9 +21,9 @@ class ImageLoader:
         return images
 
     @staticmethod
-    def load_image(filename):
+    def load_image(filename, nlayers = 4):
         """Loads the specified image."""
-        return Image(filename, 4)
+        return Image(filename, nlayers)
 
 class Image:
     def __init__(self, filename, nlayers = 4):
@@ -151,7 +151,7 @@ class Image:
         """Returns the mask with all missing annotations."""
         mask = np.zeros((self.height, self.width), np.uint8)
         annotations = self.get_all_annotations_mask()
-        mask = 255 - annotations
+        mask[annotations]
         return mask
         
     def get_unannotated_mask(self, x, y, connected=True):

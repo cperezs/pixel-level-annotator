@@ -116,13 +116,15 @@ class PixelAnnotationApp(QMainWindow):
             layers = f.read().splitlines()
         self.q_layer_buttons = []
         for i, layer in enumerate(layers):
-            button = QPushButton(f"{layer} ({i + 1})")
+            label = f" ({str(i + 1)})" if i < 9 else ""
+            button = QPushButton(f"{layer}{label}")
             button.setCheckable(True)
-            button.clicked.connect(lambda: self.cb_select_layer(i))
-            button.setShortcut(str(i + 1))
+            button.clicked.connect(lambda _, i=i: self.cb_select_layer(i))
+            button.setShortcut(str(i + 1)) if i < 9 else None
             self.q_layer_buttons.append(button)
             self.q_button_group.addButton(button)
         self.q_layer_buttons[0].setChecked(True)
+        nlayers = len(self.q_layer_buttons)
 
         toolbar_layout.addWidget(QLabel("Layers"))
 
@@ -195,6 +197,7 @@ class PixelAnnotationApp(QMainWindow):
         # Variables de estado
         self.state = {
             "zoom": 10,
+            "num_layers": nlayers,
             "image": None,
             "selected_layer": 0,
             "area_selection_start": None,
@@ -266,6 +269,7 @@ class PixelAnnotationApp(QMainWindow):
     def cb_key_press_event(self, event):
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self.q_annotations.setVisible(False)
+            self.q_missing_pixels.setVisible(False)
             self.set_state({"ignore_annotations": True})
 
     def cb_key_release_event(self, event):
@@ -289,6 +293,8 @@ class PixelAnnotationApp(QMainWindow):
                 self.set_state({"selector_tool_threshold": self.state["selector_tool_threshold"] - 1})
         elif event.key() == Qt.Key.Key_Space:
             self.q_annotations.setVisible(True)
+            if self.state["show_missing_pixels"]:
+                self.q_missing_pixels.setVisible(True)
             self.set_state({"ignore_annotations": False})
         elif event.key() == Qt.Key.Key_Escape:
             self.cancel_tool()
@@ -301,6 +307,7 @@ class PixelAnnotationApp(QMainWindow):
         elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
             if self.state["selector_tool"] and self.state["selector_tool_drawing"]:
                 self.annotate_drawing()
+                self.set_state({"selector_tool_drawing": False})
 
     def cb_wheel_event(self, event):
         """Maneja el evento de la rueda del mouse para hacer zoom o desplazarse."""
@@ -334,7 +341,8 @@ class PixelAnnotationApp(QMainWindow):
         if not item:
             return
         
-        image = ImageLoader.load_image(item.text())
+        nlayers = self.state["num_layers"]
+        image = ImageLoader.load_image(item.text(), nlayers)
         q_pixmap = QPixmap(image.filename)
         
         if q_pixmap.isNull():  # Verifica si la imagen se cargó correctamente
@@ -377,7 +385,7 @@ class PixelAnnotationApp(QMainWindow):
         # Añade otra imagen para los píxeles faltantes
         self.q_missing_pixels = QGraphicsPixmapItem()
         self.q_image_scene.addItem(self.q_missing_pixels)
-        self.q_missing_pixels.setZValue(3)  # Asegura que los píxeles faltantes estén sobre las anotaciones
+        self.q_missing_pixels.setZValue(2)  # Asegura que los píxeles faltantes estén sobre las anotaciones
         self.q_missing_pixels.setVisible(False)
 
         # Create a mask with the size of the image
@@ -431,17 +439,13 @@ class PixelAnnotationApp(QMainWindow):
 
             # Show missing pixels
             if self.state["show_missing_pixels"]:
-                self._logger.info("Showing missing pixels")
                 missing = image.get_missing_annotations_mask()
-                missing_img = np.zeros((missing.shape[0], missing.shape[1], 4), dtype=np.uint8)
-                # fill the missing pixels with red
-                missing_img[:, :, 2] = missing
-                missing_img[:, :, 3] = missing * 255
-                qmissing = QImage(missing_img.data, missing.shape[1], missing.shape[0], bytes_per_line, QImage.Format.Format_RGBA8888)
+                missing = cv2.bitwise_not(missing)
+                bytes_per_line = missing.shape[1]
+                qmissing = QImage(missing.data, missing.shape[1], missing.shape[0], bytes_per_line, QImage.Format.Format_Grayscale8)
                 qmissing_pixmap = QPixmap.fromImage(qmissing)
                 self.q_missing_pixels.setPixmap(qmissing_pixmap)
                 self.q_missing_pixels.setScale(self.state["zoom"])
-                self.q_missing_pixels.setPos(0, 0)
                 self.q_missing_pixels.setVisible(True)
             else:
                 self.q_missing_pixels.setVisible(False)
@@ -473,7 +477,7 @@ class PixelAnnotationApp(QMainWindow):
             bytes_per_line = width * 4
             mask_img = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
             mask_img[:, :, :3] = mask[:, :, None]
-            mask_img[:, :, 3] = mask * 0.75 # Set opacity to 50%
+            mask_img[:, :, 3] = mask #* 0.75 # Set opacity to 75%
             qmask = QImage(mask_img.data, mask.shape[1], mask.shape[0], bytes_per_line, QImage.Format.Format_ARGB32)
             qmask_pixmap = QPixmap.fromImage(qmask)
             self.q_selection.setPixmap(qmask_pixmap)
@@ -546,6 +550,7 @@ class PixelAnnotationApp(QMainWindow):
 
     def cb_select_layer(self, layer):
         """Selecciona la capa de anotación."""
+        self._logger.info("Selected layer: %d", layer)
         self.set_state({"selected_layer": layer})
     
     def cb_undo(self):
@@ -604,7 +609,7 @@ class PixelAnnotationApp(QMainWindow):
         self.q_image_scene.addItem(self.q_grid)
         self.q_grid.setZValue(2)  # Asegura que la cuadrícula esté sobre las imágenes
 
-    def get_annotations_image(self, image, layer, all_layers=True, opacity=128):
+    def get_annotations_image(self, image, layer, all_layers=True, opacity=255):
         height, width = image.annotations[0].shape
         highlight = image.annotations[layer]
 
@@ -773,6 +778,9 @@ class PixelAnnotationApp(QMainWindow):
     def cb_show_missing_pixels(self):
         """Show or hide missing pixels."""
         self.set_state({"show_missing_pixels": self.q_missing_pixels_check.isChecked()})
+
+
+
 
 def make_layers_file():
     layers = ["background", "staff", "notes", "lyrics"]
