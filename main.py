@@ -11,7 +11,7 @@ import cv2
 
 logging.basicConfig(level=logging.INFO)
 
-from annotations import ImageLoader
+from annotations import ImageLoader, TimeTracker
 
 class PixelAnnotationApp(QMainWindow):
     def __init__(self):
@@ -64,8 +64,9 @@ class PixelAnnotationApp(QMainWindow):
         self.q_tool_group.addButton(self.q_fill_button)
 
         # Selector ignore annotations
-        self.q_ignore_annotations = QCheckBox("Ignore annotations")
+        self.q_ignore_annotations = QCheckBox("Ignore annotations (i)")
         self.q_ignore_annotations.setChecked(False)
+        self.q_ignore_annotations.setShortcut("i")
         toolbar_layout.addWidget(self.q_ignore_annotations)
         self.q_ignore_annotations.stateChanged.connect(self.cb_ignore_annotations)
 
@@ -133,9 +134,8 @@ class PixelAnnotationApp(QMainWindow):
         toolbar_layout.addWidget(QLabel("Layers"))
 
         # Show original image
-        self.q_show_image = QCheckBox("Show image (i)")
+        self.q_show_image = QCheckBox("Show image")
         self.q_show_image.setChecked(True)
-        self.q_show_image.setShortcut("i")
         self.q_show_image.stateChanged.connect(self.cb_show_image)
 
         # Show other layers
@@ -162,7 +162,7 @@ class PixelAnnotationApp(QMainWindow):
         self.q_image_label = QLabel("Images")
         side_layout.addWidget(self.q_image_label)
         self.q_image_list = QListWidget()
-        self.q_image_list.itemClicked.connect(self.load_image)
+        self.q_image_list.itemClicked.connect(lambda item: self.load_image(item.text()))
         side_layout.addWidget(self.q_image_list)
         
         # Image display
@@ -226,7 +226,7 @@ class PixelAnnotationApp(QMainWindow):
         self.listeners = {
             "zoom": [self.update_image_view],
             "image": [self.update_image_view],
-            "selected_layer": [self.update_image_view],
+            "selected_layer": [self.update_image_view, self.track_time],
             "show_other_layers": [self.update_image_view],
             "show_image": [self.update_image_view],
             "mask": [self.update_mask_view],
@@ -243,7 +243,7 @@ class PixelAnnotationApp(QMainWindow):
         # Cargar la primera imagen de la lista si hay al menos una
         if self.q_image_list.count() > 0:
             self.q_image_list.setCurrentRow(0)
-            self.load_image(self.q_image_list.currentItem())
+            self.load_image(self.q_image_list.currentItem().text())
         
         self.showMaximized()
 
@@ -276,7 +276,7 @@ class PixelAnnotationApp(QMainWindow):
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self.q_annotations.setVisible(False)
             self.q_missing_pixels.setVisible(False)
-            self.set_state({"ignore_annotations": True})
+            # self.set_state({"ignore_annotations": True})
 
     def cb_key_release_event(self, event):
         """Maneja los eventos de teclado para deshacer y hacer zoom."""
@@ -301,7 +301,7 @@ class PixelAnnotationApp(QMainWindow):
             self.q_annotations.setVisible(True)
             if self.state["show_missing_pixels"]:
                 self.q_missing_pixels.setVisible(True)
-            self.set_state({"ignore_annotations": False})
+            # self.set_state({"ignore_annotations": False})
         elif event.key() == Qt.Key.Key_Escape:
             self.cancel_tool()
         elif event.key() == Qt.Key.Key_E:
@@ -342,13 +342,10 @@ class PixelAnnotationApp(QMainWindow):
         for filename in ImageLoader.get_images():
             self.q_image_list.addItem(filename)
     
-    def load_image(self, item):
-        """Carga la imagen seleccionada en el visor."""
-        if not item:
-            return
-        
+    def load_image(self, filename):
+        """Carga la imagen seleccionada en el visor."""        
         nlayers = self.state["num_layers"]
-        image = ImageLoader.load_image(item.text(), nlayers)
+        image = ImageLoader.load_image(filename, nlayers)
         q_pixmap = QPixmap(image.filename)
         
         if q_pixmap.isNull():  # Verifica si la imagen se cargó correctamente
@@ -408,6 +405,8 @@ class PixelAnnotationApp(QMainWindow):
         # set focus to the image view
         self.q_image_view.setFocus()
 
+        self.time_tracker = TimeTracker()
+
         self.set_state({
             "zoom": zoom,
             "image": image,
@@ -418,7 +417,7 @@ class PixelAnnotationApp(QMainWindow):
             "pen_tool": True,
             "selector_tool": False,
         })
-    
+
     def update_image_view(self):
         """Actualiza la vista de la imagen."""
         if self.state["image"]:
@@ -437,6 +436,9 @@ class PixelAnnotationApp(QMainWindow):
             show_other_layers = self.state["show_other_layers"]
             show_image = self.state["show_image"]
             ann_img = self.get_annotations_image(image, selected_layer, show_other_layers)
+            # set opacity to 100% where any layer is annotated
+            ann_img[:, :, 3] = np.where(ann_img[:, :, 0] == 255, 128, ann_img[:, :, 3])
+            ann_img[:, :, 3] = np.where(ann_img[:, :, 2] == 255, 128, ann_img[:, :, 3])
             alto, ancho = ann_img.shape[:2]
             bytes_per_line = ancho * 4
             qimage = QImage(ann_img.data, ancho, alto, bytes_per_line, QImage.Format.Format_ARGB32)
@@ -483,7 +485,7 @@ class PixelAnnotationApp(QMainWindow):
             bytes_per_line = width * 4
             mask_img = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
             mask_img[:, :, :3] = mask[:, :, None]
-            mask_img[:, :, 3] = mask #* 0.75 # Set opacity to 75%
+            mask_img[:, :, 3] = mask * 0.5 # Set opacity to 75%
             qmask = QImage(mask_img.data, mask.shape[1], mask.shape[0], bytes_per_line, QImage.Format.Format_ARGB32)
             qmask_pixmap = QPixmap.fromImage(qmask)
             self.q_selection.setPixmap(qmask_pixmap)
@@ -783,6 +785,10 @@ class PixelAnnotationApp(QMainWindow):
         """Show or hide missing pixels."""
         self.set_state({"show_missing_pixels": self.q_missing_pixels_check.isChecked()})
 
+    def track_time(self):
+        """Track the time spent annotating."""
+        layer = self.state["selected_layer"]
+        self.time_tracker.change(layer)
 
 
 

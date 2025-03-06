@@ -2,6 +2,7 @@ import os
 import logging
 import cv2
 import numpy as np
+import time
 from collections import deque
 
 class ImageLoader:
@@ -25,6 +26,46 @@ class ImageLoader:
         """Loads the specified image."""
         return Image(filename, nlayers)
 
+
+class TimeTracker:
+    def __init__(self, filename, nlayers = 4):
+        self._logger = logging.getLogger(__name__)
+
+        # Load the time spent on each layer
+        self._filename = os.path.join(ImageLoader.ANNOTATIONS, f"{os.path.splitext(os.path.basename(filename))[0]}.metadata")
+        if os.path.exists(filename):
+            with open(filename, "r") as file:
+                times = file.read().splitlines()
+                # Each line is the amount of time spent on each layer (in seconds)
+                self.times = [int(t) for t in times]
+        else:
+            self.times = [0] * nlayers
+            self.save()
+
+        self._current_layer = None
+
+    def save(self):
+        """Saves the time spent on each layer."""
+        with open(self._filename, "w") as file:
+            for t in self.times:
+                file.write(str(t) + "\n")
+        self._logger.info("Times saved: %s", self._filename)    
+
+    def change(self, layer):
+        """Starts the timer for the specified layer."""
+        # Log the previous layer
+        if self._current_layer is not None:
+            self.times[self._current_layer] += time.time() - self._start_time
+
+        self._start_time = time.time()
+        self._current_layer = layer
+    
+    def tick(self):
+        """Increments the time spent on the current layer."""
+        self.times[self._current_layer] += time.time() - self._start_time
+        self._start_time = time.time()
+
+
 class Image:
     def __init__(self, filename, nlayers = 4):
         self._logger = logging.getLogger("Image")
@@ -37,6 +78,10 @@ class Image:
         self._logger.info("Image loaded: %s", self.filename)
     
     def _load_annotations(self, nlayers):
+        """Loads the annotations from the specified folder
+        or creates new annotations if they don't exist."""
+
+        # Load the annotations
         self.annotations = []
         for i in range(nlayers):
             filename = os.path.join(ImageLoader.ANNOTATIONS, f"{os.path.splitext(os.path.basename(self.filename))[0]}_{i}.png")
@@ -48,11 +93,8 @@ class Image:
                 self._logger.info("Annotations not found: %s", filename)
                 break
         if len(self.annotations) < nlayers:
-            self._init_annotations(nlayers)
+            self.annotations = np.zeros((nlayers, self.height, self.width), dtype=np.uint8)
             self._save_annotations()
-
-    def _init_annotations(self, nlayers):
-        self.annotations = np.zeros((nlayers, self.height, self.width), dtype=np.uint8)
     
     def _save_state(self):
         """Saves the current state of the annotations."""
