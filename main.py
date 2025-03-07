@@ -28,13 +28,13 @@ class PixelAnnotationApp(QMainWindow):
               
         # Toolbar
         toolbar_layout = QVBoxLayout()
-        self.q_zoom_in_button = QPushButton("Zoom In")
+        self.q_zoom_in_button = QPushButton("Zoom In (Ctrl +)")
         self.q_zoom_in_button.clicked.connect(self.cb_zoom_in)
         self.q_zoom_in_button.setShortcut("Ctrl++")
-        self.q_zoom_out_button = QPushButton("Zoom Out")
+        self.q_zoom_out_button = QPushButton("Zoom Out (Ctrl -)")
         self.q_zoom_out_button.clicked.connect(self.cb_zoom_out)
         self.q_zoom_out_button.setShortcut("Ctrl+-")
-        self.q_undo_button = QPushButton("Undo (Ctrl+Z)")
+        self.q_undo_button = QPushButton("Undo (Ctrl Z)")
         self.q_undo_button.clicked.connect(self.cb_undo)  
         toolbar_layout.addWidget(self.q_zoom_in_button)
         toolbar_layout.addWidget(self.q_zoom_out_button)
@@ -48,16 +48,16 @@ class PixelAnnotationApp(QMainWindow):
         # Tool buttons
         self.q_tool_group = QButtonGroup(self)
         self.q_tool_group.setExclusive(True)
-        self.q_pen_button = QPushButton("Pen (p)")
+        self.q_pen_button = QPushButton("&Pen")
         self.q_pen_button.setCheckable(True)
         self.q_pen_button.setChecked(True)
         self.q_pen_button.setShortcut("p")
         self.q_pen_button.clicked.connect(lambda: self.cb_select_tool("pen"))
-        self.q_selector_button = QPushButton("Selector (s)")
+        self.q_selector_button = QPushButton("&Selector")
         self.q_selector_button.setCheckable(True)
         self.q_selector_button.setShortcut("s")
         self.q_selector_button.clicked.connect(lambda: self.cb_select_tool("selector"))
-        self.q_fill_button = QPushButton("Fill (f)")
+        self.q_fill_button = QPushButton("&Fill")
         self.q_fill_button.setCheckable(True)
         self.q_fill_button.setShortcut("f")
         self.q_fill_button.clicked.connect(lambda: self.cb_select_tool("fill"))
@@ -66,9 +66,9 @@ class PixelAnnotationApp(QMainWindow):
         self.q_tool_group.addButton(self.q_fill_button)
 
         # Selector ignore annotations
-        self.q_ignore_annotations = QCheckBox("Ignore annotations (i)")
+        self.q_ignore_annotations = QCheckBox("Over&write annotations")
         self.q_ignore_annotations.setChecked(False)
-        self.q_ignore_annotations.setShortcut("i")
+        self.q_ignore_annotations.setShortcut("w")
         toolbar_layout.addWidget(self.q_ignore_annotations)
         self.q_ignore_annotations.stateChanged.connect(self.cb_ignore_annotations)
 
@@ -141,18 +141,19 @@ class PixelAnnotationApp(QMainWindow):
         toolbar_layout.addWidget(QLabel("Layers"))
 
         # Show original image
-        self.q_show_image = QCheckBox("Show image")
+        self.q_show_image = QCheckBox("Show &image")
+        self.q_show_image.setShortcut("i")
         self.q_show_image.setChecked(True)
         self.q_show_image.stateChanged.connect(self.cb_show_image)
 
         # Show other layers
-        self.q_other_layers = QCheckBox("Show other layers (o)")
+        self.q_other_layers = QCheckBox("Show &other layers")
         self.q_other_layers.setChecked(True)
         self.q_other_layers.setShortcut("o")
         self.q_other_layers.stateChanged.connect(self.cb_toggle_other_layers)
 
         # Show missing pixels
-        self.q_missing_pixels_check = QCheckBox("Show missing pixels (m)")
+        self.q_missing_pixels_check = QCheckBox("Show &missing pixels")
         self.q_missing_pixels_check.setChecked(False)
         self.q_missing_pixels_check.setShortcut("m")
         self.q_missing_pixels_check.stateChanged.connect(self.cb_show_missing_pixels)

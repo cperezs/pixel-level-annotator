@@ -1,40 +1,60 @@
-# Pixel-level annotator
+# Pixel-Level Annotator
 
-This is a simple tool to annotate music sheet images pixel by pixel. It is useful for creating segmentation masks.
- 
-There are 4 layers:
-- **Background**
-- **Staff**
-- **Notes**
-- **Lyrics**
+A simple tool for pixel-by-pixel annotation of music sheet images, ideal for creating segmentation masks.
 
 ## Usage
 
-Place your images in the `images` folder. Run the script `main.py` and start annotating.
+1. Place your images in the `images` folder.
+2. Edit `layers.txt` to define annotation layers:
+    - Each line represents a layer.
+    - Layers appear in order in the application and are assigned shortcut keys (1 to the total number of layers).
+    - Optionally, specify a color in HEX format; otherwise, red is used by default.
+3. Run `main.py` to start annotating.
 
-Annotate the pixels by clicking on the image. You can also annotate all neighboring pixels with the same label by right-clicking. The threshold can be adjusted with the slider. If the pixels are already annotated with the selected label, they are relabeled.
+A progress bar at the top indicates completion, aiming for 100%. 
 
-Annotations for the selected layer are shown in red, and all other layers are shown in blue (if they are not hidden).
+Annotations are saved in `annotations`, with the following format for an image `image.png` with 4 layers:
+- `image_0.png` to `image_3.png`: Grayscale images (one per layer).
+- `image.metadata`: A text file tracking annotation time per layer.
 
-There is a progress bar at the top of the window, the goal is to reach 100% completion.
+Annotations and metadata are saved automatically. You can stop and resume at any time.
 
-Annotations are saved in the `annotations` folder. Annotations are saved as grayscale images, one for each layer. E.g. `image.png` will have the following annotations:
-- `image_0.png`: background
-- `image_1.png`: staff
-- `image_2.png`: notes
-- `image3_.png`: lyrics
+## General Controls
 
-Images are saved after each annotation. You can stop the application at any time and continue later.
-
-## Controls
-
-- **Left click**: Annotate pixel with the selected label
-- **Right click**: Annotate all neighboring pixels
+- **1, 2, ...**: Select layer
+- **Wheel**: Scroll vertically
+- **Shift + Wheel**: Scroll horizontally
+- **Ctrl + Wheel**: Zoom in/out
+- **Ctrl + + / -**: Zoom in/out
 - **Space (hold)**: Hide annotations
-- **1-4**: Select label
-- **i**: Show/hide image
+- **w**: Overwrite annotations (toggle). When on, the tool will overwrite existing annotations.
+- **m**: Highlight unannotated pixels
+- **i**: Show/hide original image
 - **o**: Show/hide other layers
-- **+**: Zoom in
-- **-**: Zoom out
-- **Ctrl + z**: Undo
-- **Shift + wheel**: Horizontal scroll
+- **Ctrl + Z**: Undo
+- **p**: Pen tool
+- **s**: Selector tool (magic wand)
+- **f**: Fill tool
+
+## Tools
+
+### Pen Tool
+
+- **Left Click**: Annotate pixels (hold and drag to draw)
+- **+ / -**: Increase/decrease brush size
+
+### Selector Tool (Magic Wand)
+
+Creates a mask for selected pixels. Adjust selection and confirm with **Enter** to annotate.
+
+- **Left Click**: Select neighboring pixels (flood fill)
+- **Enter**: Confirm annotation
+- **Esc / Ctrl + Z**: Cancel selection
+- **+ / -**: Increase/decrease tolerance
+- **e / r**: Expand/reduce selection
+- **Auto-Smooth**: Fills small gaps automatically
+
+### Fill Tool
+
+- **Left Click**: Annotate an area with similar colors
+- **Fill All Regions**: Annotate all unannotated regions in the selected layer
