@@ -218,6 +218,7 @@ class PixelAnnotationApp(QMainWindow):
             "show_other_layers": True,
             "show_image": True,
             "mask": None,
+            "tool_mask": None,
             "pen_tool": True,
             "pen_tool_drawing": False,
             "pen_tool_size": 1,
@@ -238,6 +239,7 @@ class PixelAnnotationApp(QMainWindow):
             "show_other_layers": [self.update_image_view],
             "show_image": [self.update_image_view],
             "mask": [self.update_mask_view],
+            "tool_mask": [self.update_tool_mask_view],
             "pen_tool": [self.tool_change, self.update_cursor],
             "selector_tool": [self.tool_change, self.update_cursor],
             "mouse_pos": [self.mouse_pos_updated],
@@ -415,6 +417,7 @@ class PixelAnnotationApp(QMainWindow):
         self.q_image = None
         self.q_annotations = None
         self.q_selection = None
+        self.q_tool = None
         self.q_missing_pixels = None
         self.q_grid = None
         
@@ -443,6 +446,12 @@ class PixelAnnotationApp(QMainWindow):
         self.q_image_scene.addItem(self.q_selection)
         self.q_selection.setZValue(2)  # Asegura que la máscara de selección esté sobre las anotaciones
         self.q_selection.setVisible(False)
+
+        # Añade otra imagen para la máscara de herramienta
+        self.q_tool = QGraphicsPixmapItem()
+        self.q_image_scene.addItem(self.q_tool)
+        self.q_tool.setZValue(3)  # Asegura que la máscara de selección esté sobre las anotaciones
+        self.q_tool.setVisible(False)
 
         # Añade otra imagen para los píxeles faltantes
         self.q_missing_pixels = QGraphicsPixmapItem()
@@ -526,6 +535,7 @@ class PixelAnnotationApp(QMainWindow):
             self.q_image.setVisible(show_image)
             self.q_annotations.setScale(zoom)  # Aplica el mismo zoom a las anotaciones
             self.q_selection.setScale(zoom)  # Aplica el mismo zoom a la máscara de selección
+            self.q_tool.setScale(zoom)  # Aplica el mismo zoom a la máscara de herramienta
 
             scaled_width = self.q_image.pixmap().width() * zoom
             scaled_height = self.q_image.pixmap().height() * zoom
@@ -569,6 +579,25 @@ class PixelAnnotationApp(QMainWindow):
             self.q_selection.setVisible(True)
         else:
             self.q_selection.setVisible(False)
+
+    def update_tool_mask_view(self):
+        # Show mask
+        mask = self.state["tool_mask"]
+        if mask is not None:
+            _, width = mask.shape[:2]
+            bytes_per_line = width * 4
+            mask_img = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
+            color = self.colors[self.state["selected_layer"]]
+            opacity = 64
+            mask_img[mask > 0] = color + (opacity,)
+            qmask = QImage(mask_img.data, mask.shape[1], mask.shape[0], bytes_per_line, QImage.Format.Format_RGBA8888)
+            qmask_pixmap = QPixmap.fromImage(qmask)
+            self.q_tool.setPixmap(qmask_pixmap)
+            self.q_tool.setScale(self.state["zoom"])
+            self.q_tool.setPos(0, 0)
+            self.q_tool.setVisible(True)
+        else:
+            self.q_tool.setVisible(False)
     
     def cb_update_pen_size(self):
         self.set_state({"pen_tool_size": self.q_pen_spin.value()})
@@ -814,7 +843,7 @@ class PixelAnnotationApp(QMainWindow):
 
         if self.state["pen_tool"] and not self.state["pen_tool_drawing"]:
             mask = self.get_circle_mask_at_pos(pixel_x, pixel_y, self.state["pen_tool_size"])
-            self.set_state({"mask": mask})
+            self.set_state({"tool_mask": mask})
         elif self.state["pen_tool"] and self.state["pen_tool_drawing"]:
             mask = self.state["mask"]
             pen_mask = self.get_circle_mask_at_pos(pixel_x, pixel_y, self.state["pen_tool_size"])
@@ -822,10 +851,10 @@ class PixelAnnotationApp(QMainWindow):
             if not self.state["ignore_annotations"]:
                 annotated = self.state["image"].get_other_annotations_mask(self.state["selected_layer"])
                 mask = cv2.bitwise_and(mask, cv2.bitwise_not(annotated))
-            self.set_state({"mask": mask})
+            self.set_state({"tool_mask": mask})
         elif self.state["selector_tool"] or self.state["fill_tool"]:
             mask = self.get_circle_mask_at_pos(pixel_x, pixel_y, 1)
-            self.set_state({"mask": mask})
+            self.set_state({"tool_mask": mask})
 
     def update_threshold(self):
         """Update the threshold for the selector tool."""
