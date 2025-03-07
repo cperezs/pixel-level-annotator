@@ -203,6 +203,8 @@ class PixelAnnotationApp(QMainWindow):
 
         self.keyPressEvent = self.cb_key_press_event
         self.keyReleaseEvent = self.cb_key_release_event
+
+        self.load_cursors()
         
         # Variables de estado
         self.state = {
@@ -253,22 +255,48 @@ class PixelAnnotationApp(QMainWindow):
         
         self.showMaximized()
 
+    def load_cursors(self):
+        # Load pen cursor image
+        self.cursors = {}
+        for tool in ["pen", "wand", "fill"]:
+            cursor_path = os.path.join(os.path.dirname(__file__), 'resources', f'{tool}.png')
+            if os.path.exists(cursor_path):
+                self.cursors[tool] = []
+                for color in self.colors:
+                    image = QImage(cursor_path)
+                    color = QColor(color[0], color[1], color[2])
+                    # Reemplazar el color blanco por el color deseado
+                    for y in range(image.height()):
+                        for x in range(image.width()):
+                            if image.pixelColor(x, y) == Qt.GlobalColor.white:
+                                image.setPixelColor(x, y, color)
+                    # Convertir QImage a QPixmap
+                    pixmap = QPixmap.fromImage(image)
+                    cursor = QCursor(pixmap, 0, 0)
+                    self.cursors[tool].append(cursor)
+            else:
+                self.cursors[tool] = None
+
     def update_cursor(self):
         if self.state["selector_tool"] or self.state["fill_tool"]:
             self.q_image_view.setCursor(Qt.CursorShape.CrossCursor)
         else:
             self.q_image_view.setCursor(Qt.CursorShape.ArrowCursor)
+
+        layer = self.state["selected_layer"]
         if self.state["pen_tool"]:
-            color = self.colors[self.state["selected_layer"]]
-            cursor_pixmap = QPixmap(8, 8)
-            cursor_pixmap.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(cursor_pixmap)
-            painter.setPen(QColor(*color))
-            painter.setBrush(QColor(*color))
-            painter.drawEllipse(0, 0, 7, 7)
-            painter.end()
-            cursor = QCursor(cursor_pixmap)
+            cursor = self.cursors["pen"][layer]
+        elif self.state["selector_tool"]:
+            cursor = self.cursors["wand"][layer]
+        elif self.state["fill_tool"]:
+            cursor = self.cursors["fill"][layer]
+        else:
+            cursor = None
+
+        if cursor:
             self.q_image_view.setCursor(cursor)
+        else:
+            self.q_image_view.setCursor(Qt.CursorShape.CrossCursor)
 
     def update_layer_buttons(self):
         for i, button in enumerate(self.q_layer_buttons):
@@ -795,7 +823,10 @@ class PixelAnnotationApp(QMainWindow):
                 annotated = self.state["image"].get_other_annotations_mask(self.state["selected_layer"])
                 mask = cv2.bitwise_and(mask, cv2.bitwise_not(annotated))
             self.set_state({"mask": mask})
-    
+        elif self.state["selector_tool"] or self.state["fill_tool"]:
+            mask = self.get_circle_mask_at_pos(pixel_x, pixel_y, 1)
+            self.set_state({"mask": mask})
+
     def update_threshold(self):
         """Update the threshold for the selector tool."""
         threshold = self.state["selector_tool_threshold"]
