@@ -30,8 +30,10 @@ class PixelAnnotationApp(QMainWindow):
         toolbar_layout = QVBoxLayout()
         self.q_zoom_in_button = QPushButton("Zoom In")
         self.q_zoom_in_button.clicked.connect(self.cb_zoom_in)
+        self.q_zoom_in_button.setShortcut("Ctrl++")
         self.q_zoom_out_button = QPushButton("Zoom Out")
         self.q_zoom_out_button.clicked.connect(self.cb_zoom_out)
+        self.q_zoom_out_button.setShortcut("Ctrl+-")
         self.q_undo_button = QPushButton("Undo (Ctrl+Z)")
         self.q_undo_button.clicked.connect(self.cb_undo)  
         toolbar_layout.addWidget(self.q_zoom_in_button)
@@ -208,7 +210,7 @@ class PixelAnnotationApp(QMainWindow):
         
         # Variables de estado
         self.state = {
-            "zoom": 10,
+            "zoom": 5,
             "center_pos": None,
             "num_layers": nlayers,
             "image": None,
@@ -233,15 +235,15 @@ class PixelAnnotationApp(QMainWindow):
             "fill_all": False
         }
         self.listeners = {
-            "zoom": [self.update_image_view],
+            "zoom": [self.update_image_view, self.center_view],
             "image": [self.update_image_view],
             "selected_layer": [self.update_image_view, self.track_time, self.update_layer_buttons, self.update_cursor, self.update_mask_view],
             "show_other_layers": [self.update_image_view],
             "show_image": [self.update_image_view],
             "mask": [self.update_mask_view],
             "tool_mask": [self.update_tool_mask_view],
-            "pen_tool": [self.tool_change, self.update_cursor, self.update_mask_view],
-            "selector_tool": [self.tool_change, self.update_cursor, self.update_mask_view],
+            "pen_tool": [self.tool_change, self.update_cursor], #, self.update_mask_view],
+            "selector_tool": [self.tool_change, self.update_cursor], #, self.update_mask_view],
             "fill_tool": [self.tool_change, self.update_cursor, self.update_mask_view],
             "mouse_pos": [self.mouse_pos_updated],
             "selector_tool_threshold": [self.update_threshold],
@@ -424,7 +426,7 @@ class PixelAnnotationApp(QMainWindow):
         
         # Cargar la nueva imagen
         self.q_image = QGraphicsPixmapItem(q_pixmap)
-        zoom = 10
+        zoom = 5
         self.q_image.setScale(zoom)  # Aplica el zoom inicial (20 veces)
         self.q_image.setPos(0, 0)
         self.q_image_scene.addItem(self.q_image)
@@ -542,11 +544,18 @@ class PixelAnnotationApp(QMainWindow):
             scaled_height = self.q_image.pixmap().height() * zoom
             self.q_image_scene.setSceneRect(0, 0, scaled_width, scaled_height)
 
+            self.update_grid()  # Actualiza la cuadrícula
+    
+    def center_view(self):
             # Ajusta la posición de la vista para mantener el punto central
             center_pos = self.state.get("center_pos")
             if not center_pos:
                 # Calcula la posición del punto central de la vista
                 center_pos = self.get_view_center()
+            
+            hbar = self.q_image_view.horizontalScrollBar()
+            vbar = self.q_image_view.verticalScrollBar()
+            zoom = self.state["zoom"]
 
             hcenter, vcenter = center_pos
             hcenter = int(hcenter * zoom)
@@ -558,9 +567,6 @@ class PixelAnnotationApp(QMainWindow):
             if viewport_width > 0 and viewport_height > 0:
                 hbar.setValue(max(hbar.minimum(), min(hbar.maximum(), hcenter - viewport_width // 2)))
                 vbar.setValue(max(vbar.minimum(), min(vbar.maximum(), vcenter - viewport_height // 2)))
-
-
-            self.update_grid()  # Actualiza la cuadrícula
     
     def update_mask_view(self):
         # Show mask
@@ -638,7 +644,7 @@ class PixelAnnotationApp(QMainWindow):
                 self.annotate_drawing()
                 self.set_state({"pen_tool_drawing": False})
 
-    def cb_mouse_move_event(self, event: QMouseEvent):
+    def cb_mouse_move_event(self, event: QMouseEvent):      
         # Get the position of the mouse in the scene
         scene_pos = self.q_image_view.mapToScene(event.pos())
         
@@ -822,8 +828,6 @@ class PixelAnnotationApp(QMainWindow):
 
     def get_circle_mask_at_pos(self, pos_x, pos_y, size):
         mask = np.zeros((self.state["image"].height, self.state["image"].width), dtype=np.uint8)
-        # set mask to a square of size pen_tool_size centerd at (pixel_x, pixel_y)
-        size = self.state["pen_tool_size"] 
         # Create a circular mask
         y, x = np.ogrid[:mask.shape[0], :mask.shape[1]]
         center_x, center_y = pos_x, pos_y
