@@ -33,8 +33,8 @@ class TimeTracker:
 
         # Load the time spent on each layer
         self._filename = os.path.join(ImageLoader.ANNOTATIONS, f"{os.path.splitext(os.path.basename(filename))[0]}.metadata")
-        if os.path.exists(filename):
-            with open(filename, "r") as file:
+        if os.path.exists(self._filename):
+            with open(self._filename, "r") as file:
                 times = file.read().splitlines()
                 # Each line is the amount of time spent on each layer (in seconds)
                 self.times = [int(t) for t in times]
@@ -48,7 +48,7 @@ class TimeTracker:
         """Saves the time spent on each layer."""
         with open(self._filename, "w") as file:
             for t in self.times:
-                file.write(str(t) + "\n")
+                file.write(str(int(t)) + "\n")
         self._logger.info("Times saved: %s", self._filename)    
 
     def change(self, layer):
@@ -59,11 +59,13 @@ class TimeTracker:
 
         self._start_time = time.time()
         self._current_layer = layer
+        self.save()
     
     def tick(self):
         """Increments the time spent on the current layer."""
         self.times[self._current_layer] += time.time() - self._start_time
         self._start_time = time.time()
+        self.save()
 
 
 class Image:
@@ -190,17 +192,17 @@ class Image:
             if i != layer:
                 self.annotations[i] = np.bitwise_and(self.annotations[i], mask)
 
-    def annotate_similar(self, x, y, layer, threshold):
-        """Sets the specified area to 1 in layer."""
-        self._save_state()
-        mask = self._get_adjacent_pixels(x, y, layer, threshold)
+    # def annotate_similar(self, x, y, layer, threshold):
+    #     """Sets the specified area to 1 in layer."""
+    #     self._save_state()
+    #     mask = self._get_adjacent_pixels(x, y, layer, threshold)
 
-        # Update the specified layer
-        self.annotations[layer] = np.maximum(self.annotations[layer], mask)
-        # Remove the mask from other layers
-        self._remove_mask_from_other_layers(layer)
+    #     # Update the specified layer
+    #     self.annotations[layer] = np.maximum(self.annotations[layer], mask)
+    #     # Remove the mask from other layers
+    #     self._remove_mask_from_other_layers(layer)
 
-        self._save_annotations()
+    #     self._save_annotations()
     
     def get_similarity_mask(self, x, y, layer, threshold, ignore_annotations=False):
         """Returns the mask of the specified area."""

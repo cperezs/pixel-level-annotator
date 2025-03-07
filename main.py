@@ -4,7 +4,7 @@ import logging
 import numpy as np
 
 from PyQt6.QtWidgets import QApplication, QMainWindow, QListWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QButtonGroup, QCheckBox, QSlider, QFrame, QSizePolicy, QToolBar, QSpinBox
-from PyQt6.QtGui import QPixmap, QImage, QMouseEvent
+from PyQt6.QtGui import QPixmap, QImage, QMouseEvent, QPainter, QColor, QCursor
 from PyQt6.QtCore import Qt, QPropertyAnimation
 
 import cv2
@@ -118,7 +118,10 @@ class PixelAnnotationApp(QMainWindow):
 
         # Layer buttons
         with open("layers.txt", "r") as f:
-            layers = f.read().splitlines()
+            lines = f.read().splitlines()
+            layers = [line.split()[0] for line in lines]
+            self.hex_colors = [line.split()[1] if len(line.split()) > 1 else "#FF0000" for line in lines]
+            self.colors = [tuple(int(color[i:i+2], 16) for i in (1, 3, 5)) for color in self.hex_colors] # Convert HEX to RGB
         self.q_layer_buttons = []
         for i, layer in enumerate(layers):
             label = f" ({str(i + 1)})" if i < 9 else ""
@@ -126,9 +129,11 @@ class PixelAnnotationApp(QMainWindow):
             button.setCheckable(True)
             button.clicked.connect(lambda _, i=i: self.cb_select_layer(i))
             button.setShortcut(str(i + 1)) if i < 9 else None
+            button.setStyleSheet(f"background-color: {self.hex_colors[i]};")
             self.q_layer_buttons.append(button)
             self.q_button_group.addButton(button)
         self.q_layer_buttons[0].setChecked(True)
+        self.q_layer_buttons[0].setStyleSheet(f"background-color: {self.hex_colors[0]}; font-weight: bold;")
         nlayers = len(self.q_layer_buttons)
 
         toolbar_layout.addWidget(QLabel("Layers"))
@@ -202,6 +207,7 @@ class PixelAnnotationApp(QMainWindow):
         # Variables de estado
         self.state = {
             "zoom": 10,
+            "center_pos": None,
             "num_layers": nlayers,
             "image": None,
             "selected_layer": 0,
@@ -226,12 +232,12 @@ class PixelAnnotationApp(QMainWindow):
         self.listeners = {
             "zoom": [self.update_image_view],
             "image": [self.update_image_view],
-            "selected_layer": [self.update_image_view, self.track_time],
+            "selected_layer": [self.update_image_view, self.track_time, self.update_layer_buttons, self.update_cursor],
             "show_other_layers": [self.update_image_view],
             "show_image": [self.update_image_view],
             "mask": [self.update_mask_view],
-            "pen_tool": [self.tool_change],
-            "selector_tool": [self.tool_change],
+            "pen_tool": [self.tool_change, self.update_cursor],
+            "selector_tool": [self.tool_change, self.update_cursor],
             "mouse_pos": [self.mouse_pos_updated],
             "selector_tool_threshold": [self.update_threshold],
             "ignore_annotations": [self.update_ignore_annotations],
@@ -247,12 +253,36 @@ class PixelAnnotationApp(QMainWindow):
         
         self.showMaximized()
 
+    def update_cursor(self):
+        if self.state["selector_tool"] or self.state["fill_tool"]:
+            self.q_image_view.setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.q_image_view.setCursor(Qt.CursorShape.ArrowCursor)
+        if self.state["pen_tool"]:
+            color = self.colors[self.state["selected_layer"]]
+            cursor_pixmap = QPixmap(8, 8)
+            cursor_pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(cursor_pixmap)
+            painter.setPen(QColor(*color))
+            painter.setBrush(QColor(*color))
+            painter.drawEllipse(0, 0, 7, 7)
+            painter.end()
+            cursor = QCursor(cursor_pixmap)
+            self.q_image_view.setCursor(cursor)
+
+    def update_layer_buttons(self):
+        for i, button in enumerate(self.q_layer_buttons):
+            if i == self.state["selected_layer"]:
+                button.setStyleSheet(f"background-color: {self.hex_colors[i]}; font-weight: bold;")
+            else:
+                button.setStyleSheet(f"background-color: {self.hex_colors[i]};")
+
     def cb_select_tool(self, tool):
         self.set_state({"pen_tool": tool == "pen", "selector_tool": tool == "selector", "fill_tool": tool == "fill"})
 
     def set_state(self, state):
         """Establece el estado de la aplicación."""
-        self._logger.info("State: %s", state)
+        # self._logger.info("State: %s", state)
         self.state.update(state)
         keys = set()
         for key, value in state.items():
@@ -324,8 +354,9 @@ class PixelAnnotationApp(QMainWindow):
             )
         elif event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             # Zoom
+            pos_x, pos_y = self.state["mouse_pos"]
             if event.angleDelta().y() > 0:
-                self.cb_zoom_in()
+                self.cb_zoom_in(pos_x, pos_y)
             else:
                 self.cb_zoom_out()
         else:
@@ -372,7 +403,7 @@ class PixelAnnotationApp(QMainWindow):
         ann_img = self.get_annotations_image(image, selected_layer, show_other_layers)
         alto, ancho = ann_img.shape[:2]
         bytes_per_line = ancho * 4
-        qimage = QImage(ann_img, ancho, alto, bytes_per_line, QImage.Format.Format_ARGB32)
+        qimage = QImage(ann_img, ancho, alto, bytes_per_line, QImage.Format.Format_RGBA8888)
         q_annotations_pixmap = QPixmap.fromImage(qimage)
         self.q_annotations = QGraphicsPixmapItem(q_annotations_pixmap)
         self.q_annotations.setScale(zoom)  # Aplica el mismo zoom
@@ -405,7 +436,7 @@ class PixelAnnotationApp(QMainWindow):
         # set focus to the image view
         self.q_image_view.setFocus()
 
-        self.time_tracker = TimeTracker()
+        self.time_tracker = TimeTracker(filename, nlayers)
 
         self.set_state({
             "zoom": zoom,
@@ -441,7 +472,7 @@ class PixelAnnotationApp(QMainWindow):
             ann_img[:, :, 3] = np.where(ann_img[:, :, 2] == 255, 128, ann_img[:, :, 3])
             alto, ancho = ann_img.shape[:2]
             bytes_per_line = ancho * 4
-            qimage = QImage(ann_img.data, ancho, alto, bytes_per_line, QImage.Format.Format_ARGB32)
+            qimage = QImage(ann_img.data, ancho, alto, bytes_per_line, QImage.Format.Format_RGBA8888)
             q_annotations_pixmap = QPixmap.fromImage(qimage)
             self.q_annotations.setPixmap(q_annotations_pixmap)
 
@@ -471,9 +502,24 @@ class PixelAnnotationApp(QMainWindow):
             scaled_width = self.q_image.pixmap().width() * zoom
             scaled_height = self.q_image.pixmap().height() * zoom
             self.q_image_scene.setSceneRect(0, 0, scaled_width, scaled_height)
+
             # Ajusta la posición de la vista para mantener el punto central
-            hbar.setValue(hcenter - self.q_image_view.width() // 2)
-            vbar.setValue(vcenter - self.q_image_view.height() // 2)
+            center_pos = self.state.get("center_pos")
+            if not center_pos:
+                # Calcula la posición del punto central de la vista
+                center_pos = self.get_view_center()
+
+            hcenter, vcenter = center_pos
+            hcenter = int(hcenter * zoom)
+            vcenter = int(vcenter * zoom)
+
+            viewport_width = self.q_image_view.viewport().width()
+            viewport_height = self.q_image_view.viewport().height()
+
+            if viewport_width > 0 and viewport_height > 0:
+                hbar.setValue(max(hbar.minimum(), min(hbar.maximum(), hcenter - viewport_width // 2)))
+                vbar.setValue(max(vbar.minimum(), min(vbar.maximum(), vcenter - viewport_height // 2)))
+
 
             self.update_grid()  # Actualiza la cuadrícula
     
@@ -484,9 +530,10 @@ class PixelAnnotationApp(QMainWindow):
             _, width = mask.shape[:2]
             bytes_per_line = width * 4
             mask_img = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
-            mask_img[:, :, :3] = mask[:, :, None]
-            mask_img[:, :, 3] = mask * 0.5 # Set opacity to 75%
-            qmask = QImage(mask_img.data, mask.shape[1], mask.shape[0], bytes_per_line, QImage.Format.Format_ARGB32)
+            color = self.colors[self.state["selected_layer"]]
+            opacity = 64
+            mask_img[mask > 0] = color + (opacity,)
+            qmask = QImage(mask_img.data, mask.shape[1], mask.shape[0], bytes_per_line, QImage.Format.Format_RGBA8888)
             qmask_pixmap = QPixmap.fromImage(qmask)
             self.q_selection.setPixmap(qmask_pixmap)
             self.q_selection.setScale(self.state["zoom"])
@@ -540,7 +587,7 @@ class PixelAnnotationApp(QMainWindow):
         zoom = self.state["zoom"]
         pixel_x = int(scene_pos.x() / zoom)
         pixel_y = int(scene_pos.y() / zoom)
-        self._logger.info("Mouse move: (%d, %d)", pixel_x, pixel_y)
+        # self._logger.info("Mouse move: (%d, %d)", pixel_x, pixel_y)
         self.set_state({"mouse_pos": (pixel_x, pixel_y)})
     
     def cb_toggle_other_layers(self):
@@ -564,15 +611,38 @@ class PixelAnnotationApp(QMainWindow):
         image.undo()
         self.set_state({"image": image})
 
-    def cb_zoom_in(self):
+    def get_visible_rect(self):
+        """ Returns the QRect of the visible image inside the QScrollArea. """
+        hbar = self.q_image_view.horizontalScrollBar()
+        vbar = self.q_image_view.verticalScrollBar()
+        
+        x = hbar.value()  # Current horizontal scroll position
+        y = vbar.value()  # Current vertical scroll position
+        width = self.q_image_view.viewport().width()  # Visible width
+        height = self.q_image_view.viewport().height()  # Visible height
+
+        return x, y, width, height
+    
+    def get_view_center(self):
+        x, y, width, height = self.get_visible_rect()
+        center_pos = x + width // 2, y + height // 2
+        return center_pos[0] / self.state["zoom"], center_pos[1] / self.state["zoom"]
+
+    def cb_zoom_in(self, pos_x = None, pos_y = None):
         """Aumenta el zoom."""
         zoom = self.state["zoom"]
+        if pos_x is None or pos_y is None:
+            pos_x, pos_y = self.get_view_center()
+        self.set_state({"center_pos": (pos_x, pos_y)})
         if zoom < 40:  # Límite máximo de zoom
             self.set_state({"zoom": zoom + 5})
     
-    def cb_zoom_out(self):
+    def cb_zoom_out(self, pos_x = None, pos_y = None):
         """Disminuye el zoom."""
         zoom = self.state["zoom"]
+        if pos_x is None or pos_y is None:
+            pos_x, pos_y = self.get_view_center()
+        self.set_state({"center_pos": (pos_x, pos_y)})
         if zoom > 5:  # Límite mínimo de zoom
             self.set_state({"zoom": zoom - 5})
     
@@ -614,22 +684,17 @@ class PixelAnnotationApp(QMainWindow):
         self.q_image_scene.addItem(self.q_grid)
         self.q_grid.setZValue(2)  # Asegura que la cuadrícula esté sobre las imágenes
 
-    def get_annotations_image(self, image, layer, all_layers=True, opacity=255):
+    def get_annotations_image(self, image, layer, all_layers=True, opacity=128):
         height, width = image.annotations[0].shape
-        highlight = image.annotations[layer]
 
-        # Create a 4-channel image assigning red to the highlight and blue to the others, with 50% transparency
         combined = np.zeros((height, width, 4), dtype=np.uint8)
-        combined[:, :, 2] = highlight
-        combined[:, :, 3] = highlight
-
-        if all_layers:
-            others = np.max(np.stack([image.annotations[i] for i in range(len(image.annotations)) if i != layer]), axis=0)
-            combined[:, :, 0] = others
-            combined[:, :, 3] = np.maximum(combined[:, :, 3], others)
-
-        # Set the alpha channel to the specified opacity for non-transparent pixels
-        combined[combined[:, :, 3] > 0, 3] = opacity
+        for i in range(len(image.annotations)):
+            if i != layer and not all_layers:
+                continue
+            highlight = image.annotations[i]
+            color = self.colors[i]
+            highlight_mask = highlight > 0
+            combined[highlight_mask] = color + (opacity,)
 
         return combined
 
@@ -682,6 +747,7 @@ class PixelAnnotationApp(QMainWindow):
         image.annotate_mask(mask, layer)
         mask = np.zeros_like(mask)
         self.set_state({"mask": mask, "image": image})
+        self.track_time()
     
     def update_pen_size(self, delta):
         """Update the pen size."""
@@ -694,7 +760,22 @@ class PixelAnnotationApp(QMainWindow):
     def cancel_tool(self):
         mask = np.zeros_like(self.state["mask"])
         self.set_state({"mask": mask, "pen_tool_drawing": False, "selector_tool_drawing": False})
-    
+
+    def get_circle_mask_at_pos(self, pos_x, pos_y, size):
+        mask = np.zeros((self.state["image"].height, self.state["image"].width), dtype=np.uint8)
+        # set mask to a square of size pen_tool_size centerd at (pixel_x, pixel_y)
+        size = self.state["pen_tool_size"] 
+        # Create a circular mask
+        y, x = np.ogrid[:mask.shape[0], :mask.shape[1]]
+        center_x, center_y = pos_x, pos_y
+        radius = size // 2
+        if size % 2 == 0:
+            circular_mask = (x - center_x + 0.5) ** 2 + (y - center_y + 0.5) ** 2 <= radius ** 2
+        else:
+            circular_mask = (x - center_x) ** 2 + (y - center_y) ** 2 <= radius ** 2
+        mask[circular_mask] = 255
+        return mask
+
     def mouse_pos_updated(self):
         """Update the mouse position."""
         pos = self.state.get("mouse_pos")
@@ -704,15 +785,12 @@ class PixelAnnotationApp(QMainWindow):
         pixel_x, pixel_y = pos
 
         if self.state["pen_tool"] and not self.state["pen_tool_drawing"]:
-            mask = np.zeros((self.state["image"].height, self.state["image"].width), dtype=np.uint8)
-            # set mask to a square of size pen_tool_size with the top-left corner at (pixel_x, pixel_y)
-            size = self.state["pen_tool_size"] 
-            mask[pixel_y:pixel_y+size, pixel_x:pixel_x+size] = 225
+            mask = self.get_circle_mask_at_pos(pixel_x, pixel_y, self.state["pen_tool_size"])
             self.set_state({"mask": mask})
         elif self.state["pen_tool"] and self.state["pen_tool_drawing"]:
             mask = self.state["mask"]
-            size = self.state["pen_tool_size"] 
-            mask[pixel_y:pixel_y+size, pixel_x:pixel_x+size] = 255
+            pen_mask = self.get_circle_mask_at_pos(pixel_x, pixel_y, self.state["pen_tool_size"])
+            mask = cv2.bitwise_or(mask, pen_mask)
             if not self.state["ignore_annotations"]:
                 annotated = self.state["image"].get_other_annotations_mask(self.state["selected_layer"])
                 mask = cv2.bitwise_and(mask, cv2.bitwise_not(annotated))
@@ -780,6 +858,7 @@ class PixelAnnotationApp(QMainWindow):
         mask = image.get_unannotated_mask(x, y, connected=not fill_all)
         image.annotate_mask(mask, layer)
         self.set_state({"image": image})
+        self.track_time()
     
     def cb_show_missing_pixels(self):
         """Show or hide missing pixels."""
