@@ -235,13 +235,14 @@ class PixelAnnotationApp(QMainWindow):
         self.listeners = {
             "zoom": [self.update_image_view],
             "image": [self.update_image_view],
-            "selected_layer": [self.update_image_view, self.track_time, self.update_layer_buttons, self.update_cursor],
+            "selected_layer": [self.update_image_view, self.track_time, self.update_layer_buttons, self.update_cursor, self.update_mask_view],
             "show_other_layers": [self.update_image_view],
             "show_image": [self.update_image_view],
             "mask": [self.update_mask_view],
             "tool_mask": [self.update_tool_mask_view],
-            "pen_tool": [self.tool_change, self.update_cursor],
-            "selector_tool": [self.tool_change, self.update_cursor],
+            "pen_tool": [self.tool_change, self.update_cursor, self.update_mask_view],
+            "selector_tool": [self.tool_change, self.update_cursor, self.update_mask_view],
+            "fill_tool": [self.tool_change, self.update_cursor, self.update_mask_view],
             "mouse_pos": [self.mouse_pos_updated],
             "selector_tool_threshold": [self.update_threshold],
             "ignore_annotations": [self.update_ignore_annotations],
@@ -623,6 +624,7 @@ class PixelAnnotationApp(QMainWindow):
 
         if event.button() == Qt.MouseButton.LeftButton and image:
             if self.state["pen_tool"]:
+                self.pen_draw(pixel_x, pixel_y)
                 self.set_state({"pen_tool_drawing": True})
             elif self.state["selector_tool"]:
                 self.set_state({"selector_tool_drawing": True, "selector_tool_position": (pixel_x, pixel_y)})
@@ -833,6 +835,15 @@ class PixelAnnotationApp(QMainWindow):
         mask[circular_mask] = 255
         return mask
 
+    def pen_draw(self, pixel_x, pixel_y):
+        mask = self.state["mask"]
+        pen_mask = self.get_circle_mask_at_pos(pixel_x, pixel_y, self.state["pen_tool_size"])
+        mask = cv2.bitwise_or(mask, pen_mask)
+        if not self.state["ignore_annotations"]:
+            annotated = self.state["image"].get_other_annotations_mask(self.state["selected_layer"])
+            mask = cv2.bitwise_and(mask, cv2.bitwise_not(annotated))
+        self.set_state({"mask": mask})
+        
     def mouse_pos_updated(self):
         """Update the mouse position."""
         pos = self.state.get("mouse_pos")
@@ -845,13 +856,7 @@ class PixelAnnotationApp(QMainWindow):
             mask = self.get_circle_mask_at_pos(pixel_x, pixel_y, self.state["pen_tool_size"])
             self.set_state({"tool_mask": mask})
         elif self.state["pen_tool"] and self.state["pen_tool_drawing"]:
-            mask = self.state["mask"]
-            pen_mask = self.get_circle_mask_at_pos(pixel_x, pixel_y, self.state["pen_tool_size"])
-            mask = cv2.bitwise_or(mask, pen_mask)
-            if not self.state["ignore_annotations"]:
-                annotated = self.state["image"].get_other_annotations_mask(self.state["selected_layer"])
-                mask = cv2.bitwise_and(mask, cv2.bitwise_not(annotated))
-            self.set_state({"tool_mask": mask})
+            self.pen_draw(pixel_x, pixel_y)
         elif self.state["selector_tool"] or self.state["fill_tool"]:
             mask = self.get_circle_mask_at_pos(pixel_x, pixel_y, 1)
             self.set_state({"tool_mask": mask})
