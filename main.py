@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import numpy as np
+import shutil
 
 from PyQt6.QtWidgets import QApplication, QMainWindow, QListWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QButtonGroup, QCheckBox, QSlider, QFrame, QSizePolicy, QToolBar, QSpinBox
 from PyQt6.QtGui import QPixmap, QImage, QMouseEvent, QPainter, QColor, QCursor
@@ -12,6 +13,7 @@ import cv2
 logging.basicConfig(level=logging.INFO)
 
 from annotations import ImageLoader, TimeTracker
+from webservice import WebService
 
 class PixelAnnotationApp(QMainWindow):
     def __init__(self):
@@ -44,6 +46,29 @@ class PixelAnnotationApp(QMainWindow):
         q_separator = QToolBar()
         q_separator.addSeparator()
         toolbar_layout.addWidget(q_separator)
+
+        # Web service mode
+        self.q_web_service_mode = QCheckBox("Web Service Mode")
+        self.q_web_service_mode.setChecked(False)
+        self.q_web_service_mode.stateChanged.connect(self.cb_toggle_web_service_mode)
+        toolbar_layout.addWidget(self.q_web_service_mode)
+
+        # Web service submit/cancel buttons (initially hidden)
+        self.q_submit_button = QPushButton("Submit Annotations")
+        self.q_submit_button.clicked.connect(self.cb_submit_annotations)
+        self.q_submit_button.setVisible(False)
+        self.q_submit_button.setEnabled(False)
+        toolbar_layout.addWidget(self.q_submit_button)
+
+        self.q_cancel_button = QPushButton("Cancel Annotation")
+        self.q_cancel_button.clicked.connect(self.cb_cancel_annotations)
+        self.q_cancel_button.setVisible(False)
+        toolbar_layout.addWidget(self.q_cancel_button)
+
+        # Native separator using QToolBar
+        q_separator2 = QToolBar()
+        q_separator2.addSeparator()
+        toolbar_layout.addWidget(q_separator2)
 
         # Tool buttons
         self.q_tool_group = QButtonGroup(self)
@@ -233,7 +258,8 @@ class PixelAnnotationApp(QMainWindow):
             "ignore_annotations": False,
             "mouse_pos": None,
             "show_missing_pixels": False,
-            "fill_all": False
+            "fill_all": False,
+            "web_service_mode": False
         }
         self.listeners = {
             "zoom": [self.update_image_view, self.center_view],
@@ -258,6 +284,10 @@ class PixelAnnotationApp(QMainWindow):
         if self.q_image_list.count() > 0:
             self.q_image_list.setCurrentRow(0)
             self.load_image(self.q_image_list.currentItem().text())
+        
+        # Initialize web service
+        self.web_service = WebService(self)
+        self.current_web_request = None
         
         self.showMaximized()
 
@@ -533,6 +563,12 @@ class PixelAnnotationApp(QMainWindow):
             # Show progress
             progress = image.get_progress()
             self.q_progress_bar.setText(f"{progress}%")
+            
+            # Enable submit button if 100% complete and in web service mode
+            if self.current_web_request and progress == 100:
+                self.q_submit_button.setEnabled(True)
+            elif self.current_web_request:
+                self.q_submit_button.setEnabled(False)
 
             zoom = self.state["zoom"]
             self.q_image.setScale(zoom)  # Aplica el nuevo zoom
@@ -939,6 +975,167 @@ class PixelAnnotationApp(QMainWindow):
         layer = self.state["selected_layer"]
         self.time_tracker.change(layer)
 
+    def cb_toggle_web_service_mode(self):
+        """Toggle web service mode on/off"""
+        is_enabled = self.q_web_service_mode.isChecked()
+        self.set_state({"web_service_mode": is_enabled})
+        
+        if is_enabled:
+            # Start web service
+            self.web_service.start_server()
+            # Disable image list
+            self.q_image_list.setEnabled(False)
+            self.q_image_label.setText("Images (Web Service Mode)")
+            self._logger.info("Web service mode enabled")
+        else:
+            # Stop web service
+            self.web_service.stop_server()
+            # Enable image list
+            self.q_image_list.setEnabled(True) 
+            self.q_image_label.setText("Images")
+            # Hide web service buttons
+            self.q_submit_button.setVisible(False)
+            self.q_cancel_button.setVisible(False)
+            self.current_web_request = None
+            self._logger.info("Web service mode disabled")
+
+    def load_web_service_image(self, image_path, request):
+        """Load an image from web service request"""
+        try:
+            # Copy the temp image to images folder
+            import uuid
+            unique_filename = f"ws_{uuid.uuid4().hex[:8]}.png"
+            target_path = os.path.join("images", unique_filename)
+            
+            # Create images directory if it doesn't exist
+            os.makedirs("images", exist_ok=True)
+            
+            shutil.copy2(image_path, target_path)
+            
+            # Store the current web request
+            self.current_web_request = request
+            
+            # Reload the layers configuration
+            self.reload_layers_config()
+            
+            # Load the image
+            self.load_image(unique_filename)
+            
+            # Show web service buttons
+            self.q_submit_button.setVisible(True)
+            self.q_cancel_button.setVisible(True)
+            self.q_submit_button.setEnabled(False)  # Disabled until 100%
+            
+            self._logger.info(f"Web service image loaded: {unique_filename}")
+            
+        except Exception as e:
+            self._logger.error(f"Error loading web service image: {e}")
+
+    def reload_layers_config(self):
+        """Reload layers configuration and update UI"""
+        try:
+            # Clear existing layer buttons
+            for button in self.q_layer_buttons:
+                self.q_button_group.removeButton(button)
+                button.deleteLater()
+            self.q_layer_buttons.clear()
+            
+            # Reload layers configuration
+            with open("layers.txt", "r") as f:
+                lines = f.read().splitlines()
+                layers = [line.split()[0] for line in lines if line.strip()]
+                self.hex_colors = [line.split()[1] if len(line.split()) > 1 else "#FF0000" for line in lines if line.strip()]
+                self.colors = [tuple(int(color[i:i+2], 16) for i in (1, 3, 5)) for color in self.hex_colors]
+            
+            # Create new layer buttons
+            for i, layer in enumerate(layers):
+                label = f" ({str(i + 1)})" if i < 9 else ""
+                button = QPushButton(f"{layer}{label}")
+                button.setCheckable(True)
+                button.clicked.connect(lambda _, i=i: self.cb_select_layer(i))
+                button.setShortcut(str(i + 1)) if i < 9 else None
+                button.setStyleSheet(f"background-color: {self.hex_colors[i]};")
+                self.q_layer_buttons.append(button)
+                self.q_button_group.addButton(button)
+            
+            if self.q_layer_buttons:
+                self.q_layer_buttons[0].setChecked(True)
+                self.q_layer_buttons[0].setStyleSheet(f"background-color: {self.hex_colors[0]}; font-weight: bold;")
+            
+            # Add buttons to layout after existing widgets
+            for button in self.q_layer_buttons:
+                # Find the index after other layers checkboxes
+                widget_index = -1
+                for i in range(self.q_layer_buttons[0].parent().layout().count()):
+                    widget = self.q_layer_buttons[0].parent().layout().itemAt(i).widget()
+                    if widget == self.q_other_layers:
+                        widget_index = i + 1
+                        break
+                if widget_index > 0:
+                    self.q_layer_buttons[0].parent().layout().insertWidget(widget_index + len(self.q_layer_buttons) - 1, button)
+            
+            # Update state with new number of layers
+            self.state["num_layers"] = len(layers)
+            
+        except Exception as e:
+            self._logger.error(f"Error reloading layers config: {e}")
+
+    def cb_submit_annotations(self):
+        """Submit completed annotations via web service"""
+        if not self.current_web_request:
+            return
+            
+        try:
+            # Get current image annotations
+            if not self.state["image"]:
+                self._logger.error("No image loaded for annotation submission")
+                return
+            
+            image = self.state["image"]
+            
+            # Prepare annotation images for each layer
+            annotation_images = {}
+            for i, layer_info in enumerate(self.current_web_request.layers):
+                layer_name = layer_info['name']
+                if i < len(image.annotations):
+                    annotation_images[layer_name] = image.annotations[i]
+                else:
+                    # Create empty annotation if layer doesn't exist
+                    annotation_images[layer_name] = np.zeros((image.height, image.width), dtype=np.uint8)
+            
+            # Submit to web service
+            success = self.web_service.submit_annotations(annotation_images)
+            
+            if success:
+                self._logger.info("Annotations submitted successfully")
+                # Reset web service state
+                self.q_submit_button.setVisible(False)
+                self.q_cancel_button.setVisible(False)
+                self.current_web_request = None
+            else:
+                self._logger.error("Failed to submit annotations")
+                
+        except Exception as e:
+            self._logger.error(f"Error submitting annotations: {e}")
+
+    def cb_cancel_annotations(self):
+        """Cancel current web service annotation"""
+        if not self.current_web_request:
+            return
+            
+        try:
+            # Cancel the request
+            self.web_service.cancel_current_request()
+            
+            # Reset UI state
+            self.q_submit_button.setVisible(False)
+            self.q_cancel_button.setVisible(False)
+            self.current_web_request = None
+            
+            self._logger.info("Web service annotation cancelled")
+            
+        except Exception as e:
+            self._logger.error(f"Error cancelling annotation: {e}")
 
 
 def make_layers_file():

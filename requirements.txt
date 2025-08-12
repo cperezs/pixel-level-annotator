@@ -1,3 +1,7 @@
 opencv-python
 numpy
 PyQt6
+fastapi
+uvicorn
+pillow
+requests
