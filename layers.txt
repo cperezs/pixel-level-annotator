@@ -1,4 +1,2 @@
-background #2596be
-staff #9925be
-notes #be4d25
-lyrics #49be25
+background #FF0000
+objects #00FF00

@@ -1,6 +1,9 @@
 annotations/
 images/
 
+# Test files (not part of main application)
+test_*.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

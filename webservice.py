@@ -62,6 +62,9 @@ class WebService:
             
             return {"status": "accepted", "message": "Annotation request received"}
             
+        except HTTPException:
+            # Re-raise HTTP exceptions as-is
+            raise
         except Exception as e:
             logger.error(f"Error handling annotation request: {e}")
             raise HTTPException(status_code=500, detail=str(e))
