@@ -1,24 +1,40 @@
 import os
 import sys
 import logging
+import threading
+import base64
 import numpy as np
+import zipfile
+import io
+import requests
 
 from PyQt6.QtWidgets import QApplication, QMainWindow, QListWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QButtonGroup, QCheckBox, QSlider, QFrame, QSizePolicy, QToolBar, QSpinBox
 from PyQt6.QtGui import QPixmap, QImage, QMouseEvent, QPainter, QColor, QCursor
-from PyQt6.QtCore import Qt, QPropertyAnimation
+from PyQt6.QtCore import Qt, QPropertyAnimation, QTimer, pyqtSignal
 
 import cv2
+import time
+from flask import Flask, request, jsonify
+from werkzeug.serving import make_server
 
 logging.basicConfig(level=logging.INFO)
 
 from annotations import ImageLoader, TimeTracker
 
 class PixelAnnotationApp(QMainWindow):
+    ui_task_signal = pyqtSignal(object)
     def __init__(self):
         super().__init__()
         self._logger = logging.getLogger("PixelAnnotationApp")
         self.setWindowTitle("Pixel Annotation Tool")
         self.setGeometry(100, 100, 1024, 768)
+        self._http_server = None
+        self._http_thread = None
+        self._last_received_image_path = None
+        self._last_layers_file_path = None
+        self._last_callback_url = None
+        self._last_request_id = None
+        self.ui_task_signal.connect(self._run_ui_task)
         
         # Layouts
         main_widget = QWidget()
@@ -27,7 +43,7 @@ class PixelAnnotationApp(QMainWindow):
         main_widget.setLayout(main_layout)
               
         # Toolbar
-        toolbar_layout = QVBoxLayout()
+        self.toolbar_layout = QVBoxLayout()
         self.q_zoom_in_button = QPushButton("Zoom In (Ctrl +)")
         self.q_zoom_in_button.clicked.connect(self.cb_zoom_in)
         self.q_zoom_in_button.setShortcut("Ctrl++")
@@ -36,14 +52,26 @@ class PixelAnnotationApp(QMainWindow):
         self.q_zoom_out_button.setShortcut("Ctrl+-")
         self.q_undo_button = QPushButton("Undo (Ctrl Z)")
         self.q_undo_button.clicked.connect(self.cb_undo)  
-        toolbar_layout.addWidget(self.q_zoom_in_button)
-        toolbar_layout.addWidget(self.q_zoom_out_button)
-        toolbar_layout.addWidget(self.q_undo_button)
+        self.toolbar_layout.addWidget(self.q_zoom_in_button)
+        self.toolbar_layout.addWidget(self.q_zoom_out_button)
+        self.toolbar_layout.addWidget(self.q_undo_button)
+
+        # HTTP server mode
+        self.q_http_server_mode = QCheckBox("HTTP server mode")
+        self.q_http_server_mode.setChecked(False)
+        self.q_http_server_mode.stateChanged.connect(self.cb_http_server_mode)
+        self.toolbar_layout.addWidget(self.q_http_server_mode)
+
+        # Submit button (enabled only when server ON and image 100% annotated)
+        self.q_submit_button = QPushButton("Submit")
+        self.q_submit_button.setEnabled(False)
+        self.toolbar_layout.addWidget(self.q_submit_button)
+        self.q_submit_button.clicked.connect(self.cb_submit)
 
         # Native separator using QToolBar
         q_separator = QToolBar()
         q_separator.addSeparator()
-        toolbar_layout.addWidget(q_separator)
+        self.toolbar_layout.addWidget(q_separator)
 
         # Tool buttons
         self.q_tool_group = QButtonGroup(self)
@@ -69,24 +97,24 @@ class PixelAnnotationApp(QMainWindow):
         self.q_ignore_annotations = QCheckBox("Over&write annotations")
         self.q_ignore_annotations.setChecked(False)
         self.q_ignore_annotations.setShortcut("w")
-        toolbar_layout.addWidget(self.q_ignore_annotations)
+        self.toolbar_layout.addWidget(self.q_ignore_annotations)
         self.q_ignore_annotations.stateChanged.connect(self.cb_ignore_annotations)
 
         # Pen tool
-        toolbar_layout.addWidget(self.q_pen_button)
+        self.toolbar_layout.addWidget(self.q_pen_button)
         self.q_pen_label = QLabel("Pen size")
-        toolbar_layout.addWidget(self.q_pen_label)
+        self.toolbar_layout.addWidget(self.q_pen_label)
         self.q_pen_spin = QSpinBox()
         self.q_pen_spin.setMinimum(1)
         self.q_pen_spin.setMaximum(15)
         self.q_pen_spin.setValue(1)
         self.q_pen_spin.valueChanged.connect(self.cb_update_pen_size)
-        toolbar_layout.addWidget(self.q_pen_spin)
+        self.toolbar_layout.addWidget(self.q_pen_spin)
 
         # Threshold selector tool
-        toolbar_layout.addWidget(self.q_selector_button)
+        self.toolbar_layout.addWidget(self.q_selector_button)
         self.q_threshold_label = QLabel("Threshold")
-        toolbar_layout.addWidget(self.q_threshold_label)
+        self.toolbar_layout.addWidget(self.q_threshold_label)
         self.q_threshold_slider = QSlider(Qt.Orientation.Horizontal)
         self.q_threshold_slider.setMinimum(1)
         self.q_threshold_slider.setMaximum(128)
@@ -94,51 +122,32 @@ class PixelAnnotationApp(QMainWindow):
         self.q_threshold_slider.setTickInterval(16)
         self.q_threshold_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.q_threshold_slider.valueChanged.connect(self.cb_update_threshold)
-        toolbar_layout.addWidget(self.q_threshold_slider)
+        self.toolbar_layout.addWidget(self.q_threshold_slider)
 
         # Selector auto-smoothing
         self.q_autosmooth = QCheckBox("Auto-smooth")
         self.q_autosmooth.setChecked(True)
-        toolbar_layout.addWidget(self.q_autosmooth)
+        self.toolbar_layout.addWidget(self.q_autosmooth)
         self.q_autosmooth.stateChanged.connect(self.cb_autosmooth)
 
         # Fill tool
-        toolbar_layout.addWidget(self.q_fill_button)
+        self.toolbar_layout.addWidget(self.q_fill_button)
         self.q_fill_all = QCheckBox("Fill all regions")
         self.q_fill_all.setChecked(False)
         self.q_fill_all.stateChanged.connect(lambda: self.set_state({"fill_all": self.q_fill_all.isChecked()}))
-        toolbar_layout.addWidget(self.q_fill_all)
+        self.toolbar_layout.addWidget(self.q_fill_all)
 
         # Native separator using QToolBar
         q_separator = QToolBar()
         q_separator.addSeparator()
-        toolbar_layout.addWidget(q_separator)
+        self.toolbar_layout.addWidget(q_separator)
 
         # Crear un grupo de botones exclusivos
         self.q_button_group = QButtonGroup(self)
         self.q_button_group.setExclusive(True)
 
-        # Layer buttons
-        with open("layers.txt", "r") as f:
-            lines = f.read().splitlines()
-            layers = [line.split()[0] for line in lines]
-            self.hex_colors = [line.split()[1] if len(line.split()) > 1 else "#FF0000" for line in lines]
-            self.colors = [tuple(int(color[i:i+2], 16) for i in (1, 3, 5)) for color in self.hex_colors] # Convert HEX to RGB
-        self.q_layer_buttons = []
-        for i, layer in enumerate(layers):
-            label = f" ({str(i + 1)})" if i < 9 else ""
-            button = QPushButton(f"{layer}{label}")
-            button.setCheckable(True)
-            button.clicked.connect(lambda _, i=i: self.cb_select_layer(i))
-            button.setShortcut(str(i + 1)) if i < 9 else None
-            button.setStyleSheet(f"background-color: {self.hex_colors[i]};")
-            self.q_layer_buttons.append(button)
-            self.q_button_group.addButton(button)
-        self.q_layer_buttons[0].setChecked(True)
-        self.q_layer_buttons[0].setStyleSheet(f"background-color: {self.hex_colors[0]}; font-weight: bold;")
-        nlayers = len(self.q_layer_buttons)
-
-        toolbar_layout.addWidget(QLabel("Layers"))
+        # Layers header
+        self.toolbar_layout.addWidget(QLabel("Layers"))
 
         # Show original image
         self.q_show_image = QCheckBox("Show &image")
@@ -157,16 +166,17 @@ class PixelAnnotationApp(QMainWindow):
         self.q_missing_pixels_check.setChecked(False)
         self.q_missing_pixels_check.setShortcut("m")
         self.q_missing_pixels_check.stateChanged.connect(self.cb_show_missing_pixels)
-        toolbar_layout.addWidget(self.q_missing_pixels_check)
+        self.toolbar_layout.addWidget(self.q_missing_pixels_check)
 
-        toolbar_layout.addWidget(self.q_show_image)
-        toolbar_layout.addWidget(self.q_other_layers)
-        for button in self.q_layer_buttons:
-            toolbar_layout.addWidget(button)
+        self.toolbar_layout.addWidget(self.q_show_image)
+        self.toolbar_layout.addWidget(self.q_other_layers)
+
+        # Initialize layers from file and add buttons
+        nlayers = self.load_layers_from_file("layers.txt")
 
         # Sidebar
         side_layout = QVBoxLayout()
-        side_layout.addLayout(toolbar_layout)
+        side_layout.addLayout(self.toolbar_layout)
         self.q_image_label = QLabel("Images")
         side_layout.addWidget(self.q_image_label)
         self.q_image_list = QListWidget()
@@ -311,6 +321,47 @@ class PixelAnnotationApp(QMainWindow):
             else:
                 button.setStyleSheet(f"background-color: {self.hex_colors[i]};")
 
+    def load_layers_from_file(self, layers_file):
+        # Remove existing layer buttons from layout and button group
+        if hasattr(self, 'q_layer_buttons') and self.q_layer_buttons:
+            for button in self.q_layer_buttons:
+                self.toolbar_layout.removeWidget(button)
+                self.q_button_group.removeButton(button)
+                button.setParent(None)
+
+        # Read layers and colors
+        try:
+            with open(layers_file, "r") as f:
+                lines = f.read().splitlines()
+        except Exception as exc:
+            self._logger.error("Error reading layers file %s: %s", layers_file, exc)
+            lines = []
+
+        layers = [line.split()[0] for line in lines if line.strip()]
+        self.hex_colors = [line.split()[1] if len(line.split()) > 1 else "#FF0000" for line in lines if line.strip()]
+        self.colors = [tuple(int(color[i:i+2], 16) for i in (1, 3, 5)) for color in self.hex_colors]
+
+        # Create new buttons
+        self.q_layer_buttons = []
+        for i, layer in enumerate(layers):
+            label = f" ({str(i + 1)})" if i < 9 else ""
+            button = QPushButton(f"{layer}{label}")
+            button.setCheckable(True)
+            button.clicked.connect(lambda _, i=i: self.cb_select_layer(i))
+            button.setShortcut(str(i + 1)) if i < 9 else None
+            button.setStyleSheet(f"background-color: {self.hex_colors[i]};")
+            self.q_layer_buttons.append(button)
+            self.q_button_group.addButton(button)
+            self.toolbar_layout.addWidget(button)
+
+        # Ensure selection and state
+        if self.q_layer_buttons:
+            self.q_layer_buttons[0].setChecked(True)
+            self.q_layer_buttons[0].setStyleSheet(f"background-color: {self.hex_colors[0]}; font-weight: bold;")
+
+        self._logger.info("Layers loaded from %s: %s", layers_file, layers)
+        return len(self.q_layer_buttons)
+
     def cb_select_tool(self, tool):
         self.set_state({"pen_tool": tool == "pen", "selector_tool": tool == "selector", "fill_tool": tool == "fill"})
 
@@ -404,7 +455,10 @@ class PixelAnnotationApp(QMainWindow):
 
     def load_images(self):
         """Carga las imágenes de la carpeta especificada en la lista."""
-        for filename in ImageLoader.get_images():
+        self.q_image_list.clear()
+        files = ImageLoader.get_images()
+        self._logger.info("Refreshing image list, %d files: %s", len(files), files)
+        for filename in files:
             self.q_image_list.addItem(filename)
     
     def load_image(self, filename):
@@ -490,6 +544,335 @@ class PixelAnnotationApp(QMainWindow):
             "selector_tool": False,
         })
 
+    # -------------------- HTTP SERVER --------------------
+    def _create_flask_app(self):
+        app = Flask(__name__)
+
+        @app.post("/annotate")
+        def annotate():
+            try:
+                data = request.get_json(force=True, silent=False)
+            except Exception as exc:
+                self._logger.error("Invalid JSON: %s", exc)
+                return jsonify({"error": "invalid_json"}), 400
+
+            if not isinstance(data, dict):
+                return jsonify({"error": "invalid_payload"}), 400
+
+            image_b64 = data.get("image")
+            layers = data.get("layers", [])
+            callback_url = data.get("callback_url")
+            if isinstance(callback_url, str) and callback_url.strip():
+                self._last_callback_url = callback_url.strip()
+                self._logger.info("Stored callback URL: %s", self._last_callback_url)
+            request_id = data.get("id")
+            if request_id is not None:
+                try:
+                    self._last_request_id = str(request_id)
+                except Exception:
+                    self._last_request_id = None
+                self._logger.info("Stored request id: %s", self._last_request_id)
+
+            decoded_len = 0
+            saved_filename = None
+            if isinstance(image_b64, str):
+                try:
+                    decoded = base64.b64decode(image_b64, validate=True)
+                    decoded_len = len(decoded)
+                    # Decode with OpenCV to ensure it's a valid image, then save as PNG
+                    arr = np.frombuffer(decoded, dtype=np.uint8)
+                    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    if img is None:
+                        self._logger.error("imdecode failed: unsupported or corrupt image data")
+                        return jsonify({"error": "invalid_image_data"}), 400
+                    os.makedirs("images", exist_ok=True)
+                    saved_filename = f"http_{int(time.time())}.png"
+                    save_path = os.path.join("images", saved_filename)
+                    if not cv2.imwrite(save_path, img):
+                        self._logger.error("cv2.imwrite failed for %s", save_path)
+                        return jsonify({"error": "save_failed"}), 500
+                    self._last_received_image_path = save_path
+                    # Open it in UI thread and select it
+                    self._enqueue_on_ui(lambda: self._open_received_image(saved_filename))
+                except Exception as exc:
+                    self._logger.error("Base64 decode error: %s", exc)
+                    return jsonify({"error": "invalid_base64"}), 400
+
+            # Save received layers to http_layers.txt using same format as layers.txt
+            layers_file_saved = None
+            try:
+                if isinstance(layers, list):
+                    layers_file_saved = os.path.abspath(os.path.join(os.getcwd(), "http_layers.txt"))
+                    with open(layers_file_saved, "w") as lf:
+                        for entry in layers:
+                            if isinstance(entry, dict):
+                                name = str(entry.get("name", "layer")).strip()
+                                color = str(entry.get("color", "#FF0000")).strip()
+                                lf.write(f"{name} {color}\n")
+                            else:
+                                # Fallback: if entry is a string, write name only
+                                lf.write(f"{str(entry).strip()}\n")
+                    self._logger.info("Saved layers to %s", layers_file_saved)
+                    self._enqueue_on_ui(lambda: self.load_layers_from_file(layers_file_saved))
+                    self.set_state({"num_layers": len(layers), "selected_layer": 0})
+                    self._last_layers_file_path = layers_file_saved
+                    self._logger.info("Tracking layers file path: %s", self._last_layers_file_path)
+            except Exception as exc:
+                self._logger.error("Error saving http_layers.txt: %s", exc)
+
+            # Log received information
+            self._logger.info("HTTP /annotate received: bytes=%d, layers=%s, saved_image=%s, saved_layers=%s, callback_url=%s, id=%s", decoded_len, layers, saved_filename, layers_file_saved, self._last_callback_url, self._last_request_id)
+
+            return jsonify({"status": "ok", "bytes": decoded_len, "num_layers": len(layers), "filename": saved_filename, "layers_file": layers_file_saved, "callback_url": self._last_callback_url, "id": self._last_request_id})
+
+        return app
+
+    class _FlaskServerThread(threading.Thread):
+        def __init__(self, app, host="127.0.0.1", port=5000):
+            super().__init__(daemon=True)
+            self._server = make_server(host, port, app)
+            self._ctx = app.app_context()
+            self._ctx.push()
+
+        def run(self):
+            self._server.serve_forever()
+
+        def shutdown(self):
+            try:
+                self._server.shutdown()
+            finally:
+                self._ctx.pop()
+
+    def start_http_server(self, host="127.0.0.1", port=5000):
+        if self._http_thread is not None:
+            return
+        app = self._create_flask_app()
+        self._http_server = app
+        self._http_thread = self._FlaskServerThread(app, host=host, port=port)
+        self._http_thread.start()
+        self._logger.info("HTTP server started on http://%s:%d", host, port)
+        # Disable image list to avoid user switching images while in server mode
+        self.q_image_list.setEnabled(False)
+        # Submit disabled until 100% annotated
+        self.q_submit_button.setEnabled(False)
+
+    def stop_http_server(self):
+        if self._http_thread is None:
+            return
+        try:
+            self._http_thread.shutdown()
+            self._logger.info("HTTP server stopped")
+        except Exception as exc:
+            self._logger.error("Error stopping HTTP server: %s", exc)
+        finally:
+            self._http_thread = None
+            self._http_server = None
+            self._last_callback_url = None
+            self._last_request_id = None
+            # Re-enable image list
+            self.q_image_list.setEnabled(True)
+            # Cleanup received artifacts on UI thread
+            self._enqueue_on_ui(self._cleanup_http_artifacts)
+            # Submit disabled when server stops
+            self.q_submit_button.setEnabled(False)
+
+    def cb_http_server_mode(self, _state):
+        if self.q_http_server_mode.isChecked():
+            self.start_http_server()
+        else:
+            self.stop_http_server()
+
+    # -------------------- UI helpers for server actions --------------------
+    def _enqueue_on_ui(self, func):
+        self._logger.info("Scheduling function on UI thread: %s", getattr(func, "__name__", str(func)))
+        # Use a Qt signal to ensure cross-thread delivery to the UI thread
+        self.ui_task_signal.emit(func)
+
+    def _run_ui_task(self, func):
+        try:
+            self._logger.info("Running UI task: %s", getattr(func, "__name__", str(func)))
+            func()
+        except Exception as exc:
+            self._logger.error("Error running UI task: %s", exc)
+
+    def _open_received_image(self, filename):
+        self._logger.info("Opening received image: %s", filename)
+        # Reset editor state to avoid carrying over masks/tools/flags from previous image
+        try:
+            self._reset_state_for_new_image()
+        except Exception as exc:
+            self._logger.error("Error resetting state for new image: %s", exc)
+        # Disable submit on new image
+        self.q_submit_button.setEnabled(False)
+        # Reuse loader and selection logic similar to initial selection
+        self.load_images()
+        items = self.q_image_list.findItems(filename, Qt.MatchFlag.MatchExactly)
+        if items:
+            item = items[0]
+            row = self.q_image_list.row(item)
+            self._logger.info("Found image in list at row %d: %s", row, filename)
+            self.q_image_list.setCurrentRow(row)
+            selected = self.q_image_list.currentItem().text() if self.q_image_list.currentItem() else None
+            self._logger.info("Current selected item before load: %s", selected)
+            self.load_image(self.q_image_list.currentItem().text())
+            self._logger.info("Loaded image via list selection: %s", filename)
+        else:
+            # Fallback: attempt to load directly if not listed yet
+            self._logger.warning("Image not found in list, loading directly: %s", filename)
+            self.load_image(filename)
+        # Log final selection state
+        final_selected = self.q_image_list.currentItem().text() if self.q_image_list.currentItem() else None
+        self._logger.info("Final list selection: %s", final_selected)
+
+    def _update_submit_enabled(self, progress=None):
+        try:
+            server_on = self.q_http_server_mode.isChecked()
+            if progress is None:
+                if self.state.get("image") is None:
+                    progress = 0
+                else:
+                    progress = self.state["image"].get_progress()
+            self.q_submit_button.setEnabled(bool(server_on and progress == 100))
+        except Exception as exc:
+            self._logger.error("Failed to update Submit enabled state: %s", exc)
+
+    def cb_submit(self):
+        try:
+            if not self._last_request_id:
+                self._logger.error("Submit aborted: missing request id")
+                return
+            image = self.state.get("image")
+            if image is None:
+                self._logger.error("Submit aborted: no image loaded")
+                return
+            if not self._last_callback_url:
+                self._logger.error("Submit aborted: missing callback URL")
+                return
+            # Build zip payload at application root
+            zip_path = os.path.abspath(os.path.join(os.getcwd(), "payload.zip"))
+            if os.path.exists(zip_path):
+                try:
+                    os.remove(zip_path)
+                    self._logger.info("Deleted existing payload zip: %s", zip_path)
+                except Exception as exc:
+                    self._logger.error("Failed to delete existing payload.zip: %s", exc)
+                    return
+            # Create folder inside the zip named with the request id
+            folder_prefix = f"{self._last_request_id}/"
+
+            with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                # Write each layer annotation as <index>.png
+                for i, ann in enumerate(image.annotations):
+                    # Ensure uint8 single channel PNG
+                    filename_in_zip = folder_prefix + f"{i}.png"
+                    # Encode to PNG bytes using OpenCV
+                    success, png_bytes = cv2.imencode('.png', ann)
+                    if not success:
+                        self._logger.error("Failed to encode layer %d to PNG", i)
+                        continue
+                    zf.writestr(filename_in_zip, png_bytes.tobytes())
+
+            self._logger.info("Created payload zip: %s", zip_path)
+
+            # Submit to callback URL
+            try:
+                with open(zip_path, 'rb') as f:
+                    files = {'file': (os.path.basename(zip_path), f, 'application/zip')}
+                    data = {'id': self._last_request_id}
+                    resp = requests.post(self._last_callback_url, files=files, data=data, timeout=30)
+                self._logger.info("Submitted payload to %s, status=%s", self._last_callback_url, getattr(resp, 'status_code', 'N/A'))
+            except Exception as exc:
+                self._logger.error("Error submitting payload to callback: %s", exc)
+
+            # Disable HTTP server mode
+            try:
+                self.q_http_server_mode.setChecked(False)
+            except Exception as exc:
+                self._logger.error("Failed to disable HTTP server mode: %s", exc)
+        except Exception as exc:
+            self._logger.error("Error creating payload.zip: %s", exc)
+
+    def _reset_state_for_new_image(self):
+        nlayers = len(self.q_layer_buttons) if hasattr(self, 'q_layer_buttons') else self.state.get("num_layers", 0)
+        # Clear masks and tool state, reset selection and flags
+        self.set_state({
+            "image": None,
+            "mask": None,
+            "tool_mask": None,
+            "selected_layer": 0,
+            "pen_tool": True,
+            "pen_tool_drawing": False,
+            "selector_tool": False,
+            "selector_tool_drawing": False,
+            "fill_tool": False,
+            "ignore_annotations": False,
+            "mouse_pos": None,
+            "show_missing_pixels": False,
+            "num_layers": nlayers
+        })
+        # Hide overlay items immediately if present
+        if hasattr(self, 'q_selection') and self.q_selection:
+            self.q_selection.setVisible(False)
+        if hasattr(self, 'q_tool') and self.q_tool:
+            self.q_tool.setVisible(False)
+        if hasattr(self, 'q_missing_pixels') and self.q_missing_pixels:
+            self.q_missing_pixels.setVisible(False)
+
+    def _cleanup_http_artifacts(self):
+        # Restore layers from default file and delete http_layers.txt
+        candidate_layers_paths = []
+        if self._last_layers_file_path:
+            candidate_layers_paths.append(self._last_layers_file_path)
+        candidate_layers_paths.append(os.path.abspath(os.path.join(os.getcwd(), "http_layers.txt")))
+        for path in candidate_layers_paths:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                    self._logger.info("Deleted temporary layers file: %s", path)
+                except Exception as exc:
+                    self._logger.error("Failed to delete layers file %s: %s", path, exc)
+        self._last_layers_file_path = None
+        # Reload default layers
+        self.load_layers_from_file("layers.txt")
+
+        # Delete received image if present
+        deleted_basename = None
+        if self._last_received_image_path and os.path.exists(self._last_received_image_path):
+            try:
+                deleted_basename = os.path.basename(self._last_received_image_path)
+                os.remove(self._last_received_image_path)
+                self._logger.info("Deleted temporary image file: %s", self._last_received_image_path)
+            except Exception as exc:
+                self._logger.error("Failed to delete image file %s: %s", self._last_received_image_path, exc)
+            finally:
+                self._last_received_image_path = None
+
+        # Delete corresponding annotations for the received image if present
+        try:
+            if deleted_basename:
+                base_no_ext = os.path.splitext(deleted_basename)[0]
+                ann_dir = ImageLoader.ANNOTATIONS
+                if os.path.isdir(ann_dir):
+                    for fname in os.listdir(ann_dir):
+                        if fname.startswith(base_no_ext + "_") and fname.lower().endswith(".png"):
+                            ann_path = os.path.join(ann_dir, fname)
+                            try:
+                                os.remove(ann_path)
+                                self._logger.info("Deleted annotation file: %s", ann_path)
+                            except Exception as exc:
+                                self._logger.error("Failed to delete annotation file %s: %s", ann_path, exc)
+        except Exception as exc:
+            self._logger.error("Error during annotations cleanup: %s", exc)
+
+        # Refresh image list and selection
+        self.load_images()
+        if self.q_image_list.count() > 0:
+            # If the deleted image was selected, switch to first item
+            current = self.q_image_list.currentItem().text() if self.q_image_list.currentItem() else None
+            if not current or (deleted_basename and current == deleted_basename):
+                self.q_image_list.setCurrentRow(0)
+                self.load_image(self.q_image_list.currentItem().text())
+
     def update_image_view(self):
         """Actualiza la vista de la imagen."""
         if self.state["image"]:
@@ -533,6 +916,7 @@ class PixelAnnotationApp(QMainWindow):
             # Show progress
             progress = image.get_progress()
             self.q_progress_bar.setText(f"{progress}%")
+            self._update_submit_enabled(progress)
 
             zoom = self.state["zoom"]
             self.q_image.setScale(zoom)  # Aplica el nuevo zoom
