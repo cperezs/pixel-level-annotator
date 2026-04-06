@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pixel Level Annotator - Image Selection</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="left-panel">
+            <h2>Select Image Area</h2>
+            <div class="image-container">
+                <canvas id="imageCanvas"></canvas>
+            </div>
+            <div class="controls">
+                <button id="clearSelection" disabled>Clear Selection</button>
+                <button id="sendSelection" disabled>Send to Annotator</button>
+            </div>
+            <div id="status" class="status"></div>
+        </div>
+        
+        <div class="right-panel">
+            <h2>Configuration</h2>
+            <!-- <div class="config-section">
+                <h3>Layers</h3>
+                <div id="layersList">
+                    <div class="layer-item">
+                        <input type="text" class="layer-name" placeholder="Layer name" value="background">
+                        <input type="color" class="layer-color" value="#FF0000">
+                        <button class="remove-layer" disabled>×</button>
+                    </div>
+                </div>
+                <button id="addLayer">Add Layer</button>
+            </div> -->
+            
+            <div class="config-section">
+                <h3>Callback URL</h3>
+                <input type="text" id="callbackUrl" placeholder="http://localhost:3000/callback" value="http://localhost:3000/callback">
+            </div>
+            
+            <div class="config-section">
+                <h3>Selection Info</h3>
+                <div id="selectionInfo">
+                    <p>No selection</p>
+                </div>
+            </div>
+
+            <div class="config-section">
+                <h3>Results</h3>
+                <div id="results" class="results-grid"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>

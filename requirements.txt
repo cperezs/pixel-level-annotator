@@ -1,5 +1,7 @@
 opencv-python
 numpy
 PyQt6
-Flask
+fastapi
+uvicorn
+pillow
 requests

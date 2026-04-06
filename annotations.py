@@ -19,6 +19,8 @@ class ImageLoader:
             for filename in os.listdir(folder):
                 if filename.lower().endswith((".jpg", ".jpeg", ".png", ".gif")):
                     images.append(filename)
+        
+        images.sort()
         return images
 
     @staticmethod

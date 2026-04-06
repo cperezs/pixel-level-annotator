@@ -88,3 +88,7 @@ Creates a mask for selected pixels. Adjust selection and confirm with **Enter** 
 - **Fill All Regions**: Annotate all unannotated regions in the selected layer
 
 ![Fill Tool](docs/fill.gif)
+
+## Web service
+
+The `Web Service Mode` check enables a background service that listens to incoming requests to annotate images. The complete documentation can be found in the [WEB_SERVICE_MODE.md](WEB_SERVICE_MODE.md) file.
