@@ -4,6 +4,12 @@ A simple tool for pixel-by-pixel annotation of images, ideal for creating segmen
 
 ![Pixel-Level Annotator](docs/preview.gif)
 
+## Citations
+
+To cite this work, please use the following publication:
+
+> Pérez-Sancho, C., Galan-Cuenca, A., Martinez-Esteso, J. P., Castellanos, F. J., & Gallego, A. J. (2025). Pixel Labeler: A Pixel-Wise Annotation Tool for Active Learning Music Recognition. Proceedings of the 17th International Symposium on Computer Music Multidisciplinary Research, 711-722. [https://doi.org/10.5281/zenodo.17488553](https://doi.org/10.5281/zenodo.17488553)
+
 ## Running the application
 
 Install the required libraries using pip:
