@@ -1,40 +1,44 @@
-"""Post-autolabel correction metrics tracking and logging."""
+"""Post-autolabel correction metrics tracking.
 
-import os
+Tracks user edits made after a plugin run.  After each edit, the latest
+counters are pushed into the shared ``ImageMetadata`` object; persistence
+is driven by the ``TimeTracker.change()`` call that follows every
+annotation action in main.py.
+"""
+
 import time
 import logging
 import numpy as np
-from datetime import datetime
 
 
 class AutolabelMetrics:
     """Accumulates correction metrics for a single autolabel session.
 
     A session begins when a plugin is successfully run and ends when the
-    user switches images, runs another plugin, or closes the application.
+    user switches images or runs another plugin.
     """
 
-    def __init__(self, image_filename, plugin_id, layer_names, timestamp=None):
+    def __init__(self, plugin_id: str, layer_names: list, metadata):
         self._logger = logging.getLogger("AutolabelMetrics")
-        self.image_filename = image_filename
         self.plugin_id = plugin_id
         self.layer_names = list(layer_names)
-        self.timestamp = timestamp or datetime.now()
+        self._metadata = metadata
         self.start_time = time.time()
 
         # Global counters
         self.total_corrections = 0
         self.total_modified_pixels = 0
 
-        # Per-layer counters
-        self.per_layer = {}
-        for name in self.layer_names:
-            self.per_layer[name] = {
+        # Per-layer counters (mirrors the shape stored in ImageMetadata)
+        self.per_layer = {
+            name: {
                 "additions": 0,
                 "deletions": 0,
                 "pixels_added": 0,
                 "pixels_deleted": 0,
             }
+            for name in self.layer_names
+        }
 
         self._pre_edit_snapshot = None
 
@@ -47,7 +51,12 @@ class AutolabelMetrics:
         self._pre_edit_snapshot = [a.copy() for a in annotations]
 
     def end_edit(self, annotations):
-        """Diff the annotation state after a user edit and update counters."""
+        """Diff the annotation state after a user edit, update counters,
+        and push the latest values into the shared ImageMetadata object.
+
+        Does *not* call ``metadata.save()`` — that is left to the
+        ``TimeTracker.change()`` call that follows every annotation action.
+        """
         if self._pre_edit_snapshot is None:
             return
 
@@ -73,49 +82,18 @@ class AutolabelMetrics:
         self.total_modified_pixels += edit_modified
         self._pre_edit_snapshot = None
 
+        # Push into the shared metadata (no file I/O here).
+        self._metadata.update_correction_metrics(
+            total_operations=self.total_corrections,
+            total_modified_pixels=self.total_modified_pixels,
+            per_layer=self.per_layer,
+        )
+
     # ------------------------------------------------------------------
     # Reporting
     # ------------------------------------------------------------------
 
-    def get_total_time(self):
+    def get_total_time(self) -> float:
         """Return elapsed correction time in seconds."""
         return time.time() - self.start_time
 
-    def to_log_entry(self):
-        """Format the metrics as a human-readable log entry."""
-        total_time = self.get_total_time()
-        lines = [
-            "=== Autolabel Correction Metrics ===",
-            f"Image: {self.image_filename}",
-            f"Plugin: {self.plugin_id}",
-            f"Layers: {', '.join(self.layer_names)}",
-            f"Plugin run timestamp: {self.timestamp.isoformat()}",
-            f"Total correction time: {total_time:.1f}s",
-            f"Total corrections: {self.total_corrections}",
-            f"Total modified pixels: {self.total_modified_pixels}",
-            "Per-layer metrics:",
-        ]
-        for name in self.layer_names:
-            m = self.per_layer[name]
-            lines.append(
-                f"  {name}: additions={m['additions']}, "
-                f"deletions={m['deletions']}, "
-                f"pixels_added={m['pixels_added']}, "
-                f"pixels_deleted={m['pixels_deleted']}"
-            )
-        lines.append("=" * 36)
-        return "\n".join(lines)
-
-
-def log_autolabel_metrics(metrics: AutolabelMetrics, log_dir="annotations"):
-    """Append *metrics* to the autolabel log file."""
-    logger = logging.getLogger("AutolabelMetrics")
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, "autolabel_log.txt")
-    entry = metrics.to_log_entry()
-    try:
-        with open(log_file, "a") as f:
-            f.write(entry + "\n\n")
-        logger.info("Autolabel metrics logged to %s", log_file)
-    except Exception as e:
-        logger.error("Failed to write autolabel metrics: %s", e)

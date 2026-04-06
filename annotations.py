@@ -30,50 +30,38 @@ class ImageLoader:
 
 
 class TimeTracker:
-    def __init__(self, filename, nlayers = 4):
+    def __init__(self, metadata):
         self._logger = logging.getLogger(__name__)
-
-        # Load the time spent on each layer
-        self._filename = os.path.join(ImageLoader.ANNOTATIONS, f"{os.path.splitext(os.path.basename(filename))[0]}.metadata")
-        if os.path.exists(self._filename):
-            with open(self._filename, "r") as file:
-                times = file.read().splitlines()
-                # Each line is the amount of time spent on each layer (in seconds)
-                self.times = [int(t) for t in times]
-        else:
-            self.times = [0] * nlayers
-            self.save()
-
+        self._metadata = metadata
         self._current_layer = None
+        self._start_time = None
 
-    def save(self):
-        """Saves the time spent on each layer."""
-        with open(self._filename, "w") as file:
-            for t in self.times:
-                file.write(str(int(t)) + "\n")
-        self._logger.info("Times saved: %s", self._filename)    
-
-    def change(self, layer):
-        """Starts the timer for the specified layer."""
-        # Log the previous layer
+    def change(self, layer_index: int):
+        """Flush elapsed time to the previous layer; start timing *layer_index*."""
         if self._current_layer is not None:
-            self.times[self._current_layer] += time.time() - self._start_time
+            delta = time.time() - self._start_time
+            layer_name = self._metadata.layer_names[self._current_layer]
+            self._metadata.update_time(layer_name, delta)
 
         self._start_time = time.time()
-        self._current_layer = layer
-        self.save()
-    
+        self._current_layer = layer_index
+        self._metadata.save()
+
     def tick(self):
-        """Increments the time spent on the current layer."""
-        self.times[self._current_layer] += time.time() - self._start_time
+        """Increment elapsed time for the current layer and save."""
+        if self._current_layer is None:
+            return
+        delta = time.time() - self._start_time
+        layer_name = self._metadata.layer_names[self._current_layer]
+        self._metadata.update_time(layer_name, delta)
         self._start_time = time.time()
-        self.save()
+        self._metadata.save()
 
     def reset(self):
         """Reset all layer times to zero."""
-        self.times = [0] * len(self.times)
+        self._metadata.reset_times()
+        self._metadata.save()
         self._current_layer = None
-        self.save()
 
 
 class Image:

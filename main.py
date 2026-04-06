@@ -15,7 +15,8 @@ logging.basicConfig(level=logging.INFO)
 from annotations import ImageLoader, TimeTracker
 from webservice import WebService
 from plugin_manager import PluginManager
-from autolabel_metrics import AutolabelMetrics, log_autolabel_metrics
+from autolabel_metrics import AutolabelMetrics
+from metadata import ImageMetadata
 
 class PixelAnnotationApp(QMainWindow):
     def __init__(self):
@@ -289,6 +290,7 @@ class PixelAnnotationApp(QMainWindow):
         # Initialize plugin manager
         self.plugin_manager = PluginManager()
         self.autolabel_metrics = None
+        self.metadata = None
         self.refresh_autolabel_plugins()
 
         self.load_images()
@@ -517,7 +519,13 @@ class PixelAnnotationApp(QMainWindow):
         # set focus to the image view
         self.q_image_view.setFocus()
 
-        self.time_tracker = TimeTracker(filename, nlayers)
+        metadata_path = os.path.join(
+            ImageLoader.ANNOTATIONS,
+            f"{os.path.splitext(filename)[0]}.metadata",
+        )
+        self.metadata = ImageMetadata.load(metadata_path, self.layer_names)
+        self.metadata.update_pixel_stats(image.annotations, image_size=(image.height, image.width))
+        self.time_tracker = TimeTracker(self.metadata)
 
         self.set_state({
             "zoom": zoom,
@@ -861,6 +869,8 @@ class PixelAnnotationApp(QMainWindow):
         image.annotate_mask(mask, layer)
         if self.autolabel_metrics:
             self.autolabel_metrics.end_edit(image.annotations)
+        if self.metadata:
+            self.metadata.update_pixel_stats(image.annotations, image_size=(image.height, image.width))
         mask = np.zeros_like(mask)
         self.set_state({"mask": mask, "image": image})
         self.track_time()
@@ -981,6 +991,8 @@ class PixelAnnotationApp(QMainWindow):
         image.annotate_mask(mask, layer)
         if self.autolabel_metrics:
             self.autolabel_metrics.end_edit(image.annotations)
+        if self.metadata:
+            self.metadata.update_pixel_stats(image.annotations, image_size=(image.height, image.width))
         self.set_state({"image": image})
         self.track_time()
     
@@ -1065,32 +1077,42 @@ class PixelAnnotationApp(QMainWindow):
         nlayers = self.state["num_layers"]
         image.set_annotations_from_labelmap(label_map, nlayers)
 
-        # Finalize any previous autolabel metrics session
+        # Finalize any previous autolabel session (clears the reference only —
+        # all metrics have already been persisted on each end_edit call).
         self._finalize_autolabel_metrics()
 
-        # Reset manual-labeling timer
-        self.time_tracker.reset()
+        # Update pixel stats, record the plugin in metadata, reset the timer.
+        self.metadata.update_pixel_stats(image.annotations, image_size=(image.height, image.width))
+        self.metadata.set_autolabel_plugin(plugin.id)
+        self.time_tracker.reset()  # resets times and saves metadata
 
-        # Start new correction-metrics session
+        # Start a new correction-metrics session backed by the same metadata.
         self.autolabel_metrics = AutolabelMetrics(
-            image_filename=os.path.basename(image.filename),
             plugin_id=plugin.id,
             layer_names=self.layer_names,
+            metadata=self.metadata,
         )
-        self._logger.info("Autolabel applied: plugin=%s, image=%s", plugin.id, os.path.basename(image.filename))
+        self._logger.info(
+            "Autolabel applied: plugin=%s, image=%s", plugin.id, os.path.basename(image.filename)
+        )
 
         # Refresh the canvas
         self.set_state({"image": image})
 
     def _finalize_autolabel_metrics(self):
-        """Log and discard the current autolabel metrics session, if any."""
-        if self.autolabel_metrics is not None:
-            log_autolabel_metrics(self.autolabel_metrics)
-            self.autolabel_metrics = None
+        """Discard the current autolabel session reference.
+
+        All metrics have been written to the .metadata file after every
+        edit via update_correction_metrics + track_time, so no extra
+        file I/O is needed here.
+        """
+        self.autolabel_metrics = None
 
     def closeEvent(self, event):
-        """Ensure pending metrics are flushed on application exit."""
+        """Ensure the final metadata state is flushed on application exit."""
         self._finalize_autolabel_metrics()
+        if self.metadata:
+            self.metadata.save()
         event.accept()
 
     def read_layers_file(self):
