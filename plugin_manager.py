@@ -1,0 +1,214 @@
+"""Plugin discovery, compatibility filtering, execution, and output validation."""
+
+import os
+import sys
+import logging
+import importlib
+import numpy as np
+
+from plugin_base import AutolabelPlugin
+
+
+class PluginManager:
+    """Discovers, validates, and runs autolabeling plugins."""
+
+    def __init__(self, plugins_dir="plugins"):
+        self._logger = logging.getLogger("PluginManager")
+        self._plugins_dir = plugins_dir
+        self._plugins: list[AutolabelPlugin] = []
+        self._compatible_plugins: list[AutolabelPlugin] = []
+        self._current_layers: list[str] = []
+        self.discover_plugins()
+
+    # ------------------------------------------------------------------
+    # Discovery
+    # ------------------------------------------------------------------
+
+    def discover_plugins(self):
+        """Scan the plugins directory and load all valid plugins."""
+        self._plugins = []
+
+        if not os.path.isdir(self._plugins_dir):
+            self._logger.warning("Plugins directory not found: %s", self._plugins_dir)
+            return
+
+        # Ensure the *parent* of plugins_dir is on sys.path so that
+        # ``import plugins.<name>`` works.
+        parent_dir = os.path.abspath(os.path.dirname(self._plugins_dir))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+
+        for entry in sorted(os.listdir(self._plugins_dir)):
+            plugin_path = os.path.join(self._plugins_dir, entry)
+            if not os.path.isdir(plugin_path):
+                continue
+            try:
+                self._load_plugin(entry, plugin_path)
+            except Exception as e:
+                self._logger.error("Failed to load plugin '%s': %s", entry, e)
+
+    def _load_plugin(self, plugin_id: str, plugin_path: str):
+        """Import and register a single plugin from *plugin_path*."""
+        init_file = os.path.join(plugin_path, "__init__.py")
+        if not os.path.isfile(init_file):
+            self._logger.warning(
+                "Plugin '%s' has no __init__.py, skipping.", plugin_id
+            )
+            return
+
+        module_name = f"plugins.{plugin_id}"
+
+        # Drop cached module so re-discovery works after hot-reload.
+        if module_name in sys.modules:
+            del sys.modules[module_name]
+
+        module = importlib.import_module(module_name)
+
+        # Look for the first concrete AutolabelPlugin subclass.
+        plugin_class = None
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if (
+                isinstance(attr, type)
+                and issubclass(attr, AutolabelPlugin)
+                and attr is not AutolabelPlugin
+            ):
+                plugin_class = attr
+                break
+
+        if plugin_class is None:
+            self._logger.warning(
+                "Plugin '%s' has no AutolabelPlugin subclass, skipping.",
+                plugin_id,
+            )
+            return
+
+        plugin = plugin_class()
+
+        # Basic sanity checks on the instance.
+        if not isinstance(plugin.id, str) or not plugin.id:
+            raise ValueError(f"Plugin '{plugin_id}' has invalid id")
+        if not isinstance(plugin.display_name, str) or not plugin.display_name:
+            raise ValueError(f"Plugin '{plugin_id}' has invalid display_name")
+        if not isinstance(plugin.supported_layers, list) or not plugin.supported_layers:
+            raise ValueError(f"Plugin '{plugin_id}' has invalid supported_layers")
+
+        self._plugins.append(plugin)
+        self._logger.info("Loaded plugin: %s (%s)", plugin.id, plugin.display_name)
+
+    # ------------------------------------------------------------------
+    # Compatibility
+    # ------------------------------------------------------------------
+
+    def update_layers(self, layer_names: list[str]):
+        """Recalculate plugin compatibility after layers change."""
+        self._current_layers = list(layer_names)
+        self._compatible_plugins = []
+
+        current_set = set(self._current_layers)
+
+        for plugin in self._plugins:
+            plugin_set = set(plugin.supported_layers)
+            if plugin_set == current_set:
+                self._compatible_plugins.append(plugin)
+                self._logger.info(
+                    "Plugin '%s' is compatible with current layers.", plugin.id
+                )
+            else:
+                self._logger.debug(
+                    "Plugin '%s' incompatible. Plugin layers: %s, App layers: %s",
+                    plugin.id,
+                    plugin.supported_layers,
+                    self._current_layers,
+                )
+
+    def get_compatible_plugins(self) -> list[AutolabelPlugin]:
+        """Return the list of currently compatible plugins."""
+        return list(self._compatible_plugins)
+
+    def get_plugin_by_id(self, plugin_id: str):
+        """Return a compatible plugin by *plugin_id*, or ``None``."""
+        for plugin in self._compatible_plugins:
+            if plugin.id == plugin_id:
+                return plugin
+        return None
+
+    # ------------------------------------------------------------------
+    # Execution & validation
+    # ------------------------------------------------------------------
+
+    def run_plugin(self, plugin: AutolabelPlugin, image_array: np.ndarray):
+        """Execute *plugin* on *image_array* and validate the output.
+
+        Returns
+        -------
+        (label_map, None) on success — *label_map* uses **app** layer indices.
+        (None, error_message) on failure.
+        """
+        h, w = image_array.shape[:2]
+
+        # --- run ----------------------------------------------------------
+        try:
+            result = plugin.run(image_array)
+        except Exception as e:
+            self._logger.error("Plugin '%s' execution failed: %s", plugin.id, e)
+            return None, f"Plugin execution failed: {e}"
+
+        # --- validate -----------------------------------------------------
+        error = self._validate_output(result, h, w, plugin)
+        if error:
+            self._logger.error(
+                "Plugin '%s' output invalid: %s", plugin.id, error
+            )
+            return None, error
+
+        # --- map plugin indices → app indices -----------------------------
+        mapped = self._map_layers(result, plugin)
+        if mapped is None:
+            msg = "Failed to map plugin layers to application layers."
+            self._logger.error(msg)
+            return None, msg
+
+        return mapped, None
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_output(result, h, w, plugin):
+        """Return an error string if *result* is invalid, else ``None``."""
+        if not isinstance(result, np.ndarray):
+            return f"Expected numpy array, got {type(result).__name__}"
+        if result.ndim != 2:
+            return f"Expected 2D array (H, W), got shape {result.shape}"
+        if result.shape[0] != h or result.shape[1] != w:
+            return (
+                f"Dimensions mismatch: expected ({h}, {w}), "
+                f"got ({result.shape[0]}, {result.shape[1]})"
+            )
+        unique_vals = np.unique(result)
+        n_layers = len(plugin.supported_layers)
+        invalid = unique_vals[(unique_vals < 0) | (unique_vals >= n_layers)]
+        if len(invalid) > 0:
+            return f"Invalid layer indices in output: {invalid.tolist()}"
+        return None
+
+    def _map_layers(self, result, plugin):
+        """Map plugin layer indices to app layer indices by name."""
+        app_lookup = {name: idx for idx, name in enumerate(self._current_layers)}
+
+        mapping = {}
+        for plugin_idx, layer_name in enumerate(plugin.supported_layers):
+            if layer_name not in app_lookup:
+                self._logger.error(
+                    "Plugin layer '%s' not found in app layers.", layer_name
+                )
+                return None
+            mapping[plugin_idx] = app_lookup[layer_name]
+
+        mapped = np.zeros_like(result)
+        for plugin_idx, app_idx in mapping.items():
+            mapped[result == plugin_idx] = app_idx
+
+        return mapped

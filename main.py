@@ -4,7 +4,7 @@ import logging
 import numpy as np
 import shutil
 
-from PyQt6.QtWidgets import QApplication, QMainWindow, QListWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QButtonGroup, QCheckBox, QSlider, QFrame, QSizePolicy, QToolBar, QSpinBox
+from PyQt6.QtWidgets import QApplication, QMainWindow, QListWidget, QPushButton, QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QButtonGroup, QCheckBox, QSlider, QFrame, QSizePolicy, QToolBar, QSpinBox, QComboBox, QMessageBox
 from PyQt6.QtGui import QPixmap, QImage, QMouseEvent, QPainter, QColor, QCursor
 from PyQt6.QtCore import Qt, QPropertyAnimation
 
@@ -14,6 +14,8 @@ logging.basicConfig(level=logging.INFO)
 
 from annotations import ImageLoader, TimeTracker
 from webservice import WebService
+from plugin_manager import PluginManager
+from autolabel_metrics import AutolabelMetrics, log_autolabel_metrics
 
 class PixelAnnotationApp(QMainWindow):
     def __init__(self):
@@ -146,6 +148,7 @@ class PixelAnnotationApp(QMainWindow):
         # Create layer buttons
         layers_dict = self.read_layers_file()
         self.create_layer_buttons(layers_dict)
+        self.layer_names = [l["name"] for l in layers_dict]
         nlayers = len(self.q_layer_buttons)
 
         toolbar_layout.addWidget(QLabel("Layers"))
@@ -173,6 +176,22 @@ class PixelAnnotationApp(QMainWindow):
         toolbar_layout.addWidget(self.q_other_layers)
         for button in self.q_layer_buttons:
             toolbar_layout.addWidget(button)
+
+        # Native separator
+        q_separator_autolabel = QToolBar()
+        q_separator_autolabel.addSeparator()
+        toolbar_layout.addWidget(q_separator_autolabel)
+
+        # Autolabeling section
+        toolbar_layout.addWidget(QLabel("Autolabeling"))
+        self.q_autolabel_combo = QComboBox()
+        self.q_autolabel_combo.addItem("--Select model--", None)
+        self.q_autolabel_combo.currentIndexChanged.connect(self.cb_autolabel_combo_changed)
+        toolbar_layout.addWidget(self.q_autolabel_combo)
+        self.q_autolabel_run_button = QPushButton("Run")
+        self.q_autolabel_run_button.setEnabled(False)
+        self.q_autolabel_run_button.clicked.connect(self.cb_run_autolabel)
+        toolbar_layout.addWidget(self.q_autolabel_run_button)
 
         # Sidebar
         side_layout = QVBoxLayout()
@@ -266,6 +285,11 @@ class PixelAnnotationApp(QMainWindow):
             "ignore_annotations": [self.update_ignore_annotations],
             "show_missing_pixels": [self.update_image_view]
         }
+
+        # Initialize plugin manager
+        self.plugin_manager = PluginManager()
+        self.autolabel_metrics = None
+        self.refresh_autolabel_plugins()
 
         self.load_images()
         
@@ -423,7 +447,8 @@ class PixelAnnotationApp(QMainWindow):
             self.q_image_list.addItem(filename)
     
     def load_image(self, filename):
-        """Carga la imagen seleccionada en el visor."""        
+        """Carga la imagen seleccionada en el visor."""
+        self._finalize_autolabel_metrics()
         nlayers = self.state["num_layers"]
         image = ImageLoader.load_image(filename, nlayers)
         q_pixmap = QPixmap(image.filename)
@@ -828,10 +853,14 @@ class PixelAnnotationApp(QMainWindow):
         mask = self.state["mask"]
         image = self.state["image"]
         layer = self.state["selected_layer"]
+        if self.autolabel_metrics:
+            self.autolabel_metrics.begin_edit(image.annotations)
         if not self.state["ignore_annotations"]:
             annotated = image.get_other_annotations_mask(layer)
             mask = cv2.bitwise_and(mask, cv2.bitwise_not(annotated))
         image.annotate_mask(mask, layer)
+        if self.autolabel_metrics:
+            self.autolabel_metrics.end_edit(image.annotations)
         mask = np.zeros_like(mask)
         self.set_state({"mask": mask, "image": image})
         self.track_time()
@@ -946,8 +975,12 @@ class PixelAnnotationApp(QMainWindow):
         """Fill the selected area with the selected layer."""
         image = self.state["image"]
         fill_all = self.state["fill_all"]
+        if self.autolabel_metrics:
+            self.autolabel_metrics.begin_edit(image.annotations)
         mask = image.get_unannotated_mask(x, y, connected=not fill_all)
         image.annotate_mask(mask, layer)
+        if self.autolabel_metrics:
+            self.autolabel_metrics.end_edit(image.annotations)
         self.set_state({"image": image})
         self.track_time()
     
@@ -984,6 +1017,81 @@ class PixelAnnotationApp(QMainWindow):
             self.q_cancel_button.setVisible(False)
             self.current_web_request = None
             self._logger.info("Web service mode disabled")
+
+    # ------------------------------------------------------------------
+    # Autolabeling
+    # ------------------------------------------------------------------
+
+    def refresh_autolabel_plugins(self):
+        """Refresh the autolabel combo box based on current layers."""
+        self.plugin_manager.update_layers(self.layer_names)
+        compatible = self.plugin_manager.get_compatible_plugins()
+
+        self.q_autolabel_combo.blockSignals(True)
+        self.q_autolabel_combo.clear()
+        self.q_autolabel_combo.addItem("--Select model--", None)
+        for plugin in compatible:
+            self.q_autolabel_combo.addItem(plugin.display_name, plugin.id)
+        self.q_autolabel_combo.setCurrentIndex(0)
+        self.q_autolabel_combo.blockSignals(False)
+
+        self.q_autolabel_run_button.setEnabled(False)
+
+    def cb_autolabel_combo_changed(self, index):
+        plugin_id = self.q_autolabel_combo.currentData()
+        self.q_autolabel_run_button.setEnabled(plugin_id is not None)
+
+    def cb_run_autolabel(self):
+        """Execute the selected autolabel plugin on the current image."""
+        image = self.state["image"]
+        if image is None:
+            return
+
+        plugin_id = self.q_autolabel_combo.currentData()
+        if not plugin_id:
+            return
+
+        plugin = self.plugin_manager.get_plugin_by_id(plugin_id)
+        if plugin is None:
+            return
+
+        # Execute plugin
+        label_map, error = self.plugin_manager.run_plugin(plugin, image.image)
+        if error:
+            QMessageBox.warning(self, "Autolabel Error", f"Plugin failed:\n{error}")
+            return
+
+        # Apply annotations
+        nlayers = self.state["num_layers"]
+        image.set_annotations_from_labelmap(label_map, nlayers)
+
+        # Finalize any previous autolabel metrics session
+        self._finalize_autolabel_metrics()
+
+        # Reset manual-labeling timer
+        self.time_tracker.reset()
+
+        # Start new correction-metrics session
+        self.autolabel_metrics = AutolabelMetrics(
+            image_filename=os.path.basename(image.filename),
+            plugin_id=plugin.id,
+            layer_names=self.layer_names,
+        )
+        self._logger.info("Autolabel applied: plugin=%s, image=%s", plugin.id, os.path.basename(image.filename))
+
+        # Refresh the canvas
+        self.set_state({"image": image})
+
+    def _finalize_autolabel_metrics(self):
+        """Log and discard the current autolabel metrics session, if any."""
+        if self.autolabel_metrics is not None:
+            log_autolabel_metrics(self.autolabel_metrics)
+            self.autolabel_metrics = None
+
+    def closeEvent(self, event):
+        """Ensure pending metrics are flushed on application exit."""
+        self._finalize_autolabel_metrics()
+        event.accept()
 
     def read_layers_file(self):
         """Lee layers.txt y devuelve una lista de diccionarios {'name': str, 'color': str} por capa."""
@@ -1075,6 +1183,8 @@ class PixelAnnotationApp(QMainWindow):
 
             # Update state with new number of layers
             self.state["num_layers"] = len(layers)
+            self.layer_names = [l["name"] for l in layers]
+            self.refresh_autolabel_plugins()
 
         except Exception as e:
             self._logger.error(f"Error reloading layers config: {e}")

@@ -69,6 +69,12 @@ class TimeTracker:
         self._start_time = time.time()
         self.save()
 
+    def reset(self):
+        """Reset all layer times to zero."""
+        self.times = [0] * len(self.times)
+        self._current_layer = None
+        self.save()
+
 
 class Image:
     def __init__(self, filename, nlayers = 4):
@@ -219,6 +225,21 @@ class Image:
             cv2.imwrite(filename, img)
             self._logger.info("Annotations saved: %s", filename)
     
+    def set_annotations_from_labelmap(self, label_map, nlayers):
+        """Replace all annotations from a label map.
+
+        Parameters
+        ----------
+        label_map : np.ndarray
+            2-D array (H, W) where each value is a layer index (0..nlayers-1).
+        nlayers : int
+            Number of layers.
+        """
+        self._save_state()
+        for i in range(nlayers):
+            self.annotations[i] = np.where(label_map == i, 255, 0).astype(np.uint8)
+        self._save_annotations()
+
     def get_progress(self):
         """Returns the percentage of annotated pixels."""
         combined_annotations = np.any(self.annotations, axis=0).astype(np.uint8) * 255
