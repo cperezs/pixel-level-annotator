@@ -64,7 +64,17 @@ class PluginManager:
 
         module = importlib.import_module(module_name)
 
-        # Look for the first concrete AutolabelPlugin subclass.
+        # Multi-plugin factory: if the module exports get_plugins(), use it.
+        # This allows one plugin directory to register multiple plugin instances
+        # with different ids/layers (e.g. one per model subfolder).
+        get_plugins_fn = getattr(module, "get_plugins", None)
+        if callable(get_plugins_fn):
+            instances = get_plugins_fn()
+            for plugin in instances:
+                self._validate_and_register(plugin, plugin_id)
+            return
+
+        # Single-plugin fallback: find the first concrete AutolabelPlugin subclass.
         plugin_class = None
         for attr_name in dir(module):
             attr = getattr(module, attr_name)
@@ -83,15 +93,16 @@ class PluginManager:
             )
             return
 
-        plugin = plugin_class()
+        self._validate_and_register(plugin_class(), plugin_id)
 
-        # Basic sanity checks on the instance.
+    def _validate_and_register(self, plugin, source_id: str):
+        """Validate a plugin instance and add it to the registry."""
         if not isinstance(plugin.id, str) or not plugin.id:
-            raise ValueError(f"Plugin '{plugin_id}' has invalid id")
+            raise ValueError(f"Plugin from '{source_id}' has invalid id")
         if not isinstance(plugin.display_name, str) or not plugin.display_name:
-            raise ValueError(f"Plugin '{plugin_id}' has invalid display_name")
+            raise ValueError(f"Plugin '{plugin.id}' has invalid display_name")
         if not isinstance(plugin.supported_layers, list) or not plugin.supported_layers:
-            raise ValueError(f"Plugin '{plugin_id}' has invalid supported_layers")
+            raise ValueError(f"Plugin '{plugin.id}' has invalid supported_layers")
 
         self._plugins.append(plugin)
         self._logger.info("Loaded plugin: %s (%s)", plugin.id, plugin.display_name)
