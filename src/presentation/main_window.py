@@ -154,6 +154,12 @@ class MainWindow(QMainWindow):
         tb.on_cancel_annotations(self._cb_cancel_annotations)
         tb.on_autolabel_run(self._cb_run_autolabel)
 
+        ctrl.on_toolbar_state_changed(self._sync_toolbar)
+
+    def _sync_toolbar(self) -> None:
+        """Push a fresh toolbar state snapshot from the controller into the toolbar."""
+        self._toolbar.sync(self._controller.toolbar_state)
+
     def _populate_image_list(self, image_repo: ImageRepository) -> None:
         for filename in image_repo.list_images():
             self._q_image_list.addItem(filename)

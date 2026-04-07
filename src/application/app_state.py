@@ -60,6 +60,35 @@ class SessionState:
     tool_preview_mask: Optional[np.ndarray] = None
 
 
+@dataclass
+class ToolbarState:
+    """A flat snapshot of all state that the toolbar must reflect.
+
+    Built by the controller from ``ToolState``, ``ViewState``, and
+    ``SessionState`` on every relevant state change.  Consumed by
+    ``ToolbarPanel.sync()`` as a single atomic update, so callers never
+    need to know which individual widget maps to which internal field.
+
+    Adding a new toolbar control requires only:
+      1. A new field here (with a sensible default).
+      2. Population in ``AnnotatorController.toolbar_state``.
+      3. Application in ``ToolbarPanel.sync()``.
+    """
+    # -- Tool settings --------------------------------------------------
+    active_tool: str = "pen"
+    pen_size: int = 1
+    selector_threshold: int = 32
+    selector_auto_smooth: bool = True
+    overwrite_annotations: bool = False
+    fill_all: bool = False
+    # -- Session --------------------------------------------------------
+    active_layer: int = 0
+    # -- View toggles ---------------------------------------------------
+    show_image: bool = True
+    show_other_layers: bool = True
+    show_missing_pixels: bool = False
+
+
 # ------------------------------------------------------------------
 # Observable aggregate
 # ------------------------------------------------------------------

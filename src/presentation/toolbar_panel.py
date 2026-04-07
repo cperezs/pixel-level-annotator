@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 )
 
 from domain.layer_config import LayerConfig
+from application.app_state import ToolbarState
 
 
 class ToolbarPanel(QWidget):
@@ -175,6 +176,32 @@ class ToolbarPanel(QWidget):
         self._q_submit_button.setVisible(mode_active)
         self._q_cancel_button.setVisible(mode_active)
         self._q_submit_button.setEnabled(mode_active and progress_complete)
+
+    def sync(self, state: ToolbarState) -> None:
+        """Apply *state* to every toolbar widget in a single atomic update.
+
+        All signal emissions are suppressed during the update to prevent
+        feedback loops with the controller.  This is the canonical way to
+        push application state into the toolbar; individual ``set_*``
+        methods remain available for targeted, event-driven overrides
+        (e.g. web-service UI changes).
+        """
+        self.set_active_tool(state.active_tool)
+        self.set_pen_size(state.pen_size)
+        self.set_threshold(state.selector_threshold)
+        self.set_active_layer(state.active_layer)
+
+        for widget, value in [
+            (self._q_autosmooth,           state.selector_auto_smooth),
+            (self._q_ignore_annotations,   state.overwrite_annotations),
+            (self._q_fill_all,             state.fill_all),
+            (self._q_show_image,           state.show_image),
+            (self._q_other_layers,         state.show_other_layers),
+            (self._q_missing_pixels_check, state.show_missing_pixels),
+        ]:
+            widget.blockSignals(True)
+            widget.setChecked(value)
+            widget.blockSignals(False)
 
     def refresh_autolabel_plugins(self, plugins) -> None:
         """Repopulate the autolabel combo with *plugins*."""

@@ -25,7 +25,7 @@ import numpy as np
 from domain.image_document import ImageDocument
 from domain.layer_config import LayerConfig
 from infrastructure.image_repository import ImageRepository
-from application.app_state import AppState
+from application.app_state import AppState, ToolbarState
 from application.annotation_tools import (
     compute_pen_mask,
     apply_overwrite_guard,
@@ -116,6 +116,38 @@ class AnnotatorController:
 
     def on_web_service_image_ready(self, cb: Callable[[str, object], None]) -> None:
         self._on_web_service_image_ready.append(cb)
+
+    def on_toolbar_state_changed(self, cb: Callable[[], None]) -> None:
+        """Register *cb* to be called whenever any toolbar-reflected state changes.
+
+        The callback receives no arguments; the caller should read
+        ``controller.toolbar_state`` to obtain a fresh snapshot.
+        Subscribes to the ``"tool"``, ``"session"``, and ``"view"`` topics
+        so that any source of change (keyboard shortcut, viewer event,
+        programmatic call) triggers a single, consistent toolbar refresh.
+        """
+        self._state.subscribe("tool", cb)
+        self._state.subscribe("session", cb)
+        self._state.subscribe("view", cb)
+
+    @property
+    def toolbar_state(self) -> ToolbarState:
+        """Return a fresh ``ToolbarState`` snapshot reflecting the current ``AppState``."""
+        t = self._state.tool
+        v = self._state.view
+        s = self._state.session
+        return ToolbarState(
+            active_tool=t.active,
+            pen_size=t.pen_size,
+            selector_threshold=t.selector_threshold,
+            selector_auto_smooth=t.selector_auto_smooth,
+            overwrite_annotations=t.overwrite_annotations,
+            fill_all=t.fill_all,
+            active_layer=s.active_layer,
+            show_image=v.show_image,
+            show_other_layers=v.show_other_layers,
+            show_missing_pixels=v.show_missing_pixels,
+        )
 
     # ------------------------------------------------------------------
     # Image loading
@@ -236,12 +268,15 @@ class AnnotatorController:
 
     def set_selector_auto_smooth(self, enabled: bool) -> None:
         self._state.tool.selector_auto_smooth = enabled
+        self._state.notify("tool")
 
     def set_overwrite_annotations(self, enabled: bool) -> None:
         self._state.tool.overwrite_annotations = enabled
+        self._state.notify("tool")
 
     def set_fill_all(self, enabled: bool) -> None:
         self._state.tool.fill_all = enabled
+        self._state.notify("tool")
 
     # ------------------------------------------------------------------
     # Zoom
@@ -274,10 +309,12 @@ class AnnotatorController:
     def toggle_show_image(self, visible: bool) -> None:
         self._state.view.show_image = visible
         self._viewer.set_base_image_visible(visible)
+        self._state.notify("view")
 
     def toggle_show_other_layers(self, visible: bool) -> None:
         self._state.view.show_other_layers = visible
         self._sync_annotation_overlay()
+        self._state.notify("view")
 
     def toggle_show_missing_pixels(self, visible: bool) -> None:
         self._state.view.show_missing_pixels = visible
@@ -286,6 +323,7 @@ class AnnotatorController:
             self._viewer.set_missing_pixels_visible(mask, visible)
         else:
             self._viewer.set_missing_pixels_visible(None, False)
+        self._state.notify("view")
 
     def toggle_annotations_visible(self, visible: bool) -> None:
         self._viewer.set_annotations_visible(visible)
