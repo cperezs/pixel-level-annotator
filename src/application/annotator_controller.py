@@ -192,13 +192,13 @@ class AnnotatorController:
         s.session.active_layer = 0
         s.session.selection_mask = None
         s.session.tool_preview_mask = None
-        s.view.zoom = 5
+        s.view.zoom = 1
         s.view.center_pos = None
 
         # Initialise the viewer.
         self._viewer.set_base_image(doc.image)
         self._sync_annotation_overlay()
-        self._viewer.set_zoom(5)
+        self._viewer.set_zoom(1)
         self._viewer.update_cursor(
             s.tool.active,
             self._layer_configs[0].color_rgb,

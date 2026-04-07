@@ -45,7 +45,7 @@ class ToolState:
 @dataclass
 class ViewState:
     """Visual-presentation settings (no domain semantics)."""
-    zoom: int = 5
+    zoom: int = 1
     center_pos: Optional[tuple[float, float]] = None
     show_image: bool = True
     show_other_layers: bool = True

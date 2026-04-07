@@ -12,9 +12,12 @@ from application.plugin_base import AutolabelPlugin
 class PluginManager:
     """Discovers, validates, and runs autolabeling plugins."""
 
-    def __init__(self, plugins_dir="plugins"):
+    def __init__(self, plugins_dir=None):
         self._logger = logging.getLogger("PluginManager")
-        self._plugins_dir = plugins_dir
+        if plugins_dir is None:
+            # Resolve relative to this file: src/application/ → src/plugins/
+            plugins_dir = os.path.join(os.path.dirname(__file__), "..", "plugins")
+        self._plugins_dir = os.path.abspath(plugins_dir)
         self._plugins: list[AutolabelPlugin] = []
         self._compatible_plugins: list[AutolabelPlugin] = []
         self._current_layers: list[str] = []
