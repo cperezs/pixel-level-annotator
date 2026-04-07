@@ -436,10 +436,11 @@ class QtImageAnnotationViewer(QWidget):
             return
 
         grid = np.zeros((h, w, 4), dtype=np.uint8)
-        grid[::zoom, :, :3] = 128
-        grid[:, ::zoom, :3] = 128
-        grid[::zoom, :, 3]  = 255
-        grid[:, ::zoom, 3]  = 255
+        step = max(int(zoom), 1)
+        grid[::step, :, :3] = 128
+        grid[:, ::step, :3] = 128
+        grid[::step, :, 3]  = 255
+        grid[:, ::step, 3]  = 255
 
         qimg = QImage(grid.data, w, h, QImage.Format.Format_RGBA8888)
         grid_pixmap = QPixmap.fromImage(qimg)
