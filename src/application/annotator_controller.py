@@ -287,7 +287,7 @@ class AnnotatorController:
         if zoom >= 40:
             return
         c = center or self._viewer.get_view_center()
-        new_zoom = 5 if zoom < 5 else zoom + 5
+        new_zoom = zoom + 1 if zoom < 10 else zoom + 5
         self._state.view.zoom = new_zoom
         self._state.view.center_pos = c
         self._viewer.set_zoom(new_zoom, c)
@@ -297,7 +297,7 @@ class AnnotatorController:
         if zoom <= 1:
             return
         c = center or self._viewer.get_view_center()
-        new_zoom = 1 if zoom <= 5 else zoom - 5
+        new_zoom = zoom - 1 if zoom <= 10 else zoom - 5
         self._state.view.zoom = new_zoom
         self._state.view.center_pos = c
         self._viewer.set_zoom(new_zoom, c)

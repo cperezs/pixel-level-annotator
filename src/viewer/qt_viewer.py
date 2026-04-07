@@ -52,7 +52,7 @@ _Z_SELECTION   = 3
 _Z_TOOL        = 4
 _Z_GRID        = 5
 
-_RESOURCES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources")
+_RESOURCES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "resources")
 _TOOL_CURSOR_FILES = {"pen": "pen.png", "selector": "wand.png", "fill": "fill.png"}
 
 
@@ -372,7 +372,7 @@ class QtImageAnnotationViewer(QWidget):
                 self._view.horizontalScrollBar().value() - dy
             )
         elif "ctrl" in mods:
-            scene_pos = self._view.mapToScene(event.pos())
+            scene_pos = self._view.mapToScene(event.position().toPoint())
             px = int(scene_pos.x() / max(self._zoom, 1))
             py = int(scene_pos.y() / max(self._zoom, 1))
             for cb in self._cb_scroll:
@@ -417,8 +417,13 @@ class QtImageAnnotationViewer(QWidget):
     def _update_grid(self) -> None:
         if self._q_image is None:
             return
-        px = self._q_image.pixmap()
         zoom = self._zoom
+        if zoom < 5:
+            if self._q_grid:
+                self._scene.removeItem(self._q_grid)
+                self._q_grid = None
+            return
+        px = self._q_image.pixmap()
         w = int(px.width() * zoom)
         h = int(px.height() * zoom)
         if w <= 0 or h <= 0:

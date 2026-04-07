@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_RESOURCES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources")
+_RESOURCES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "resources")
 _TOOL_CURSOR_FILES = {"pen": "pen.png", "selector": "wand.png", "fill": "fill.png"}
 
 _GRID_MIN_ZOOM = 8   # show pixel grid when zoom >= this value
