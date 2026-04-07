@@ -28,8 +28,6 @@ from PyQt6.QtWidgets import (
 from domain.layer_config import LayerConfig, read_layers_file
 from infrastructure.image_repository import ImageRepository
 from application.annotator_controller import AnnotatorController
-# from viewer.qt_viewer import QtImageAnnotationViewer as ImageAnnotationViewer
-from viewer.gl_viewer import GLImageAnnotationViewer as ImageAnnotationViewer
 from presentation.toolbar_panel import ToolbarPanel
 from infrastructure.webservice import WebService
 
@@ -39,7 +37,7 @@ logger = logging.getLogger(__name__)
 class MainWindow(QMainWindow):
     """Top-level Qt window for the Pixel Annotation Tool."""
 
-    def __init__(self) -> None:
+    def __init__(self, viewer_class=None) -> None:
         super().__init__()
         self.setWindowTitle("Pixel Annotation Tool")
         self.setGeometry(100, 100, 1024, 768)
@@ -50,8 +48,11 @@ class MainWindow(QMainWindow):
         # Infrastructure
         image_repo = ImageRepository()
 
-        # Viewer (Qt backend)
-        self._viewer = ImageAnnotationViewer()
+        # Viewer: the concrete class is injected by main.py based on config.toml.
+        if viewer_class is None:
+            from viewer.gl_viewer import GLImageAnnotationViewer
+            viewer_class = GLImageAnnotationViewer
+        self._viewer = viewer_class()
 
         # Application controller
         self._controller = AnnotatorController(self._viewer, layer_configs, image_repo)

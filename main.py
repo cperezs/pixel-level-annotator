@@ -1,29 +1,64 @@
-"""Entry point for the Pixel Annotation Tool.
+"""Entry point for the Pixel-Level Annotator.
 
-Architecture:
-  domain/           — ImageDocument, LayerConfig (pure domain, no I/O)
-  infrastructure/   — ImageRepository, ImageMetadata, TimeTracker, WebService
-  application/      — AppState, AnnotatorController, AutolabelService, tools
-  viewer/           — IImageAnnotationViewer contract + QtImageAnnotationViewer
-  presentation/     — ToolbarPanel, MainWindow
+Package layout
+--------------
+  src/domain/          — ImageDocument, LayerConfig  (pure domain, no I/O)
+  src/infrastructure/  — ImageRepository, ImageMetadata, TimeTracker, WebService
+  src/application/     — AppState, AnnotatorController, AutolabelService, tools
+  src/viewer/          — IImageAnnotationViewer contract + concrete backends
+  src/presentation/    — ToolbarPanel, MainWindow
+
+Runtime configuration
+---------------------
+Viewer backend and other tunables are read from ``config.toml`` at startup.
 """
+import os
 import sys
 import logging
 
-from PyQt6.QtGui import QSurfaceFormat
-from PyQt6.QtWidgets import QApplication
+# ---------------------------------------------------------------------------
+# Ensure the src/ package root is resolvable before any internal imports.
+# ---------------------------------------------------------------------------
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_ROOT, "src"))
 
 logging.basicConfig(level=logging.INFO)
 
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+def _load_config() -> dict:
+    """Return the parsed contents of config.toml, or an empty dict on failure."""
+    try:
+        import tomllib  # Python 3.11+
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
+    config_path = os.path.join(_ROOT, "config.toml")
+    try:
+        with open(config_path, "rb") as fh:
+            return tomllib.load(fh)
+    except FileNotFoundError:
+        logger.warning("config.toml not found — using default settings.")
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Viewer selection
+# ---------------------------------------------------------------------------
 
 def _setup_opengl_format() -> None:
     """Request an OpenGL 3.3 Core Profile context before the QApplication starts.
 
-    On macOS, Qt defaults to a legacy (2.1) context which does not support
-    GLSL #version 330.  Setting the default surface format here ensures all
-    subsequent QOpenGLWidget instances get a Core Profile 3.3 context.
-    This is a no-op when the Qt viewer is used instead.
+    On macOS, Qt defaults to a legacy (2.1) OpenGL context which does not
+    support GLSL #version 330.  Setting the default surface format here
+    ensures all subsequent QOpenGLWidget instances receive a Core Profile
+    3.3 context.  This call is a no-op when the Qt (non-GL) backend is used.
     """
+    from PyQt6.QtGui import QSurfaceFormat
     fmt = QSurfaceFormat()
     fmt.setVersion(3, 3)
     fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
@@ -32,20 +67,58 @@ def _setup_opengl_format() -> None:
     QSurfaceFormat.setDefaultFormat(fmt)
 
 
+def _resolve_viewer(backend: str):
+    """Return the viewer class that corresponds to *backend*.
+
+    Parameters
+    ----------
+    backend:
+        ``"gl"``  — OpenGL 3.3 Core Profile (GPU-accelerated).
+        ``"qt"``  — Pure Qt ``QGraphicsView`` (software-rendered).
+
+    Raises
+    ------
+    ValueError
+        If *backend* is not one of the supported identifiers.
+    """
+    if backend == "gl":
+        _setup_opengl_format()
+        from viewer.gl_viewer import GLImageAnnotationViewer
+        return GLImageAnnotationViewer
+    if backend == "qt":
+        from viewer.qt_viewer import QtImageAnnotationViewer
+        return QtImageAnnotationViewer
+    raise ValueError(
+        f"Unknown viewer backend {backend!r} in config.toml. "
+        "Supported values: 'gl', 'qt'."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Application bootstrap
+# ---------------------------------------------------------------------------
+
 def _ensure_layers_file() -> None:
-    """Create a default layers.txt if the file is missing or empty."""
-    import os
+    """Write a default layers.txt when the file is absent or empty."""
     from domain.layer_config import _DEFAULT_LAYERS, write_layers_file
-    path = "layers.txt"
+    path = os.path.join(_ROOT, "layers.txt")
     if not os.path.exists(path) or os.stat(path).st_size == 0:
         write_layers_file(list(_DEFAULT_LAYERS))
 
 
 if __name__ == "__main__":
+    from PyQt6.QtWidgets import QApplication
+
+    config = _load_config()
+    backend = config.get("viewer", {}).get("backend", "gl")
+    logger.info("Viewer backend: %s", backend)
+
     _ensure_layers_file()
-    _setup_opengl_format()
+    viewer_class = _resolve_viewer(backend)
+
     from presentation.main_window import MainWindow
     app = QApplication(sys.argv)
-    window = MainWindow()
+    window = MainWindow(viewer_class=viewer_class)
     window.show()
     sys.exit(app.exec())
+

@@ -1,5 +1,6 @@
-annotations/
-images/
+annotations/*.png
+annotations/*.metadata
+images/*.png
 data/
 .vscode/
 .DS_Store
