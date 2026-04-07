@@ -28,7 +28,8 @@ from PyQt6.QtWidgets import (
 from domain.layer_config import LayerConfig, read_layers_file
 from infrastructure.image_repository import ImageRepository
 from application.annotator_controller import AnnotatorController
-from viewer.qt_viewer import QtImageAnnotationViewer
+# from viewer.qt_viewer import QtImageAnnotationViewer as ImageAnnotationViewer
+from viewer.gl_viewer import GLImageAnnotationViewer as ImageAnnotationViewer
 from presentation.toolbar_panel import ToolbarPanel
 from infrastructure.webservice import WebService
 
@@ -50,7 +51,7 @@ class MainWindow(QMainWindow):
         image_repo = ImageRepository()
 
         # Viewer (Qt backend)
-        self._viewer = QtImageAnnotationViewer()
+        self._viewer = ImageAnnotationViewer()
 
         # Application controller
         self._controller = AnnotatorController(self._viewer, layer_configs, image_repo)
@@ -68,6 +69,7 @@ class MainWindow(QMainWindow):
         )
         self._q_progress_bar = QLabel("0%")
         self._q_progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._q_progress_bar.setFixedHeight(20)
 
         # Layout
         self._build_layout()
@@ -123,8 +125,8 @@ class MainWindow(QMainWindow):
         side_layout.addWidget(self._q_image_list)
 
         image_layout = QVBoxLayout()
-        image_layout.addWidget(self._q_progress_bar)
-        image_layout.addWidget(self._viewer)
+        image_layout.addWidget(self._q_progress_bar, 0)
+        image_layout.addWidget(self._viewer, 1)
 
         main_layout.addLayout(side_layout, 1)
         main_layout.addLayout(image_layout, 10)

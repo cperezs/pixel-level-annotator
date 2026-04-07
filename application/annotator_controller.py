@@ -73,6 +73,7 @@ class AnnotatorController:
         self._metadata: Optional[ImageMetadata] = None
         self._time_tracker: Optional[TimeTracker] = None
         self._autolabel = AutolabelService(layer_names)
+        self._last_mouse_pos: Optional[tuple[int, int]] = None
 
         # Callbacks for the presentation layer to observe.
         self._on_progress_changed:        list[Callable[[int], None]] = []
@@ -204,6 +205,22 @@ class AnnotatorController:
     def set_pen_size(self, size: int) -> None:
         self._state.tool.pen_size = max(1, size)
         self._state.notify("tool")
+        # Refresh the cursor preview circle at the current mouse position
+        # so the user sees the new size immediately without moving the mouse.
+        if (
+            self._state.tool.active == "pen"
+            and not self._state.tool.is_drawing
+            and self._last_mouse_pos is not None
+            and self._document is not None
+        ):
+            px, py = self._last_mouse_pos
+            layer = self._state.session.active_layer
+            color = self._layer_configs[layer].color_rgb
+            preview = compute_pen_mask(
+                self._document.height, self._document.width,
+                px, py, self._state.tool.pen_size,
+            )
+            self._viewer.set_tool_preview(preview, color)
 
     def set_selector_threshold(self, threshold: int) -> None:
         self._state.tool.selector_threshold = max(1, min(128, threshold))
@@ -232,21 +249,23 @@ class AnnotatorController:
 
     def zoom_in(self, center: Optional[tuple[float, float]] = None) -> None:
         zoom = self._state.view.zoom
-        if zoom < 40:
-            c = center or self._viewer.get_view_center()
-            new_zoom = zoom + 5
-            self._state.view.zoom = new_zoom
-            self._state.view.center_pos = c
-            self._viewer.set_zoom(new_zoom, c)
+        if zoom >= 40:
+            return
+        c = center or self._viewer.get_view_center()
+        new_zoom = 5 if zoom < 5 else zoom + 5
+        self._state.view.zoom = new_zoom
+        self._state.view.center_pos = c
+        self._viewer.set_zoom(new_zoom, c)
 
     def zoom_out(self, center: Optional[tuple[float, float]] = None) -> None:
         zoom = self._state.view.zoom
-        if zoom > 5:
-            c = center or self._viewer.get_view_center()
-            new_zoom = zoom - 5
-            self._state.view.zoom = new_zoom
-            self._state.view.center_pos = c
-            self._viewer.set_zoom(new_zoom, c)
+        if zoom <= 1:
+            return
+        c = center or self._viewer.get_view_center()
+        new_zoom = 1 if zoom <= 5 else zoom - 5
+        self._state.view.zoom = new_zoom
+        self._state.view.center_pos = c
+        self._viewer.set_zoom(new_zoom, c)
 
     # ------------------------------------------------------------------
     # View toggles
@@ -374,6 +393,7 @@ class AnnotatorController:
             self._state.tool.is_drawing = False
 
     def _handle_mouse_move(self, px: int, py: int) -> None:
+        self._last_mouse_pos = (px, py)
         if not self._document:
             return
         tool = self._state.tool
