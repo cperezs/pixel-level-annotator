@@ -91,6 +91,7 @@ class ImageDocument:
         binary = np.where(mask > 0, np.uint8(255), np.uint8(0))
         self._annotations[layer] = np.maximum(self._annotations[layer], binary)
         self._clear_mask_from_other_layers(layer)
+        self._trim_undo_if_unchanged()
 
     def set_from_labelmap(self, label_map: np.ndarray) -> None:
         """Replace all annotations from a 2-D integer label map.
@@ -101,6 +102,37 @@ class ImageDocument:
         self._push_undo()
         for i in range(self.num_layers):
             self._annotations[i] = np.where(label_map == i, 255, 0).astype(np.uint8)
+        self._trim_undo_if_unchanged()
+
+    def erase_mask(self, mask: np.ndarray, layer: int) -> None:
+        """Clear annotated pixels in *layer* where *mask* is nonzero."""
+        self._push_undo()
+        inv = np.where(mask > 0, np.uint8(0), np.uint8(255))
+        self._annotations[layer] = np.bitwise_and(self._annotations[layer], inv)
+        self._trim_undo_if_unchanged()
+
+    def erase_mask_all(self, mask: np.ndarray) -> None:
+        """Clear annotated pixels in *all* layers where *mask* is nonzero."""
+        self._push_undo()
+        inv = np.where(mask > 0, np.uint8(0), np.uint8(255))
+        for i in range(self.num_layers):
+            self._annotations[i] = np.bitwise_and(self._annotations[i], inv)
+        self._trim_undo_if_unchanged()
+
+    def erase_mask_unlocked(self, mask: np.ndarray, locked_layers: set) -> None:
+        """Clear annotated pixels in all *unlocked* layers where *mask* is nonzero."""
+        self._push_undo()
+        inv = np.where(mask > 0, np.uint8(0), np.uint8(255))
+        for i in range(self.num_layers):
+            if i not in locked_layers:
+                self._annotations[i] = np.bitwise_and(self._annotations[i], inv)
+        self._trim_undo_if_unchanged()
+
+    def clear_all_annotations(self) -> None:
+        """Reset every annotation layer to all-zeros (undoable)."""
+        self._push_undo()
+        self._annotations[:] = 0
+        self._trim_undo_if_unchanged()
 
     def undo(self) -> bool:
         """Revert to the previous annotation state.
@@ -120,6 +152,37 @@ class ImageDocument:
         """OR-combination of all layers except *layer*."""
         other = np.delete(self._annotations, layer, axis=0)
         return np.bitwise_or.reduce(other, axis=0)
+
+    def get_locked_other_annotations_mask(self, layer: int, locked_layers: set) -> np.ndarray:
+        """OR-combination of annotations from locked layers, excluding *layer* itself."""
+        h, w = self._annotations[0].shape
+        result = np.zeros((h, w), dtype=np.uint8)
+        for i in locked_layers:
+            if i != layer:
+                result = np.bitwise_or(result, self._annotations[i])
+        return result
+
+    def annotate_mask_respecting_locks(
+        self, mask: np.ndarray, layer: int, locked_layers: set
+    ) -> None:
+        """Paint *mask* into *layer*, respecting locked layers.
+
+        Pixels annotated in a locked layer are excluded from the painted region.
+        The mask is cleared from unlocked other layers but not from locked ones.
+        """
+        self._push_undo()
+        # Exclude pixels that are annotated in any locked other layer
+        for i in locked_layers:
+            if i != layer:
+                mask = np.where(self._annotations[i] > 0, np.uint8(0), mask)
+        binary = np.where(mask > 0, np.uint8(255), np.uint8(0))
+        self._annotations[layer] = np.maximum(self._annotations[layer], binary)
+        # Clear newly painted pixels from unlocked other layers only
+        inv = np.where(binary > 0, np.uint8(0), np.uint8(255))
+        for i in range(self.num_layers):
+            if i != layer and i not in locked_layers:
+                self._annotations[i] = np.bitwise_and(self._annotations[i], inv)
+        self._trim_undo_if_unchanged()
 
     def get_all_annotations_mask(self) -> np.ndarray:
         """OR-combination of all layers."""
@@ -199,6 +262,11 @@ class ImageDocument:
 
     def _push_undo(self) -> None:
         self._undo_stack.append(self._annotations.copy())
+
+    def _trim_undo_if_unchanged(self) -> None:
+        """Pop the last undo entry if annotations are unchanged after a mutation."""
+        if self._undo_stack and np.array_equal(self._annotations, self._undo_stack[-1]):
+            self._undo_stack.pop()
 
     def _clear_mask_from_other_layers(self, layer: int) -> None:
         """Remove pixels present in *layer* from all other layers."""

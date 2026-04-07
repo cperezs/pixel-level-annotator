@@ -88,6 +88,14 @@ class IImageAnnotationViewer(ABC):
         Pass ``visible=False`` to hide the overlay without clearing the mask.
         """
 
+    @abstractmethod
+    def set_grid_visible(self, visible: bool) -> None:
+        """Show or hide the pixel grid overlay.
+
+        The grid is only drawn when zoom >= the viewer's minimum grid zoom
+        threshold *and* this flag is ``True``.
+        """
+
     # ------------------------------------------------------------------
     # Zoom and viewport
     # ------------------------------------------------------------------

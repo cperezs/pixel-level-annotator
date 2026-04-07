@@ -78,6 +78,8 @@ class AnnotatorController:
         # Callbacks for the presentation layer to observe.
         self._on_progress_changed:        list[Callable[[int], None]] = []
         self._on_web_service_image_ready: list[Callable[[str, object], None]] = []
+        self._on_status_changed:          list[Callable[[], None]] = []
+        self._image_dimensions: tuple[int, int] = (0, 0)
 
         # Wire viewer input events → our handlers.
         viewer.register_mouse_press(self._handle_mouse_press)
@@ -117,6 +119,10 @@ class AnnotatorController:
     def on_web_service_image_ready(self, cb: Callable[[str, object], None]) -> None:
         self._on_web_service_image_ready.append(cb)
 
+    def on_status_changed(self, cb: Callable[[], None]) -> None:
+        """Register *cb* to be called when status-bar-relevant state changes."""
+        self._on_status_changed.append(cb)
+
     def on_toolbar_state_changed(self, cb: Callable[[], None]) -> None:
         """Register *cb* to be called whenever any toolbar-reflected state changes.
 
@@ -139,14 +145,17 @@ class AnnotatorController:
         return ToolbarState(
             active_tool=t.active,
             pen_size=t.pen_size,
+            eraser_size=t.eraser_size,
             selector_threshold=t.selector_threshold,
             selector_auto_smooth=t.selector_auto_smooth,
-            overwrite_annotations=t.overwrite_annotations,
             fill_all=t.fill_all,
             active_layer=s.active_layer,
+            locked_layers=set(s.locked_layers),
+            hidden_layers=set(s.hidden_layers),
             show_image=v.show_image,
             show_other_layers=v.show_other_layers,
             show_missing_pixels=v.show_missing_pixels,
+            show_grid=v.show_grid,
         )
 
     # ------------------------------------------------------------------
@@ -171,6 +180,7 @@ class AnnotatorController:
 
         self._document = doc
         self._current_filename = filename
+        self._image_dimensions = (doc.width, doc.height)
 
         meta_path = self._image_repo.metadata_path(filename)
         layer_names = [lc.name for lc in self._layer_configs]
@@ -204,6 +214,7 @@ class AnnotatorController:
             self._layer_configs[0].color_rgb,
         )
         self._notify_progress()
+        self._notify_status()
         return True
 
     # ------------------------------------------------------------------
@@ -211,7 +222,7 @@ class AnnotatorController:
     # ------------------------------------------------------------------
 
     def select_tool(self, tool: str) -> None:
-        """Switch the active annotation tool (``"pen"``, ``"selector"``, ``"fill"``)."""
+        """Switch the active annotation tool (``"pen"``, ``"selector"``, ``"fill"``, ``"erase"``)."""
         self._state.tool.active = tool
         self._state.tool.is_drawing = False
         self._state.session.selection_mask = None
@@ -222,6 +233,7 @@ class AnnotatorController:
             self._layer_configs[self._state.session.active_layer].color_rgb,
         )
         self._state.notify("tool")
+        self._notify_status()
 
     def set_active_layer(self, layer_index: int) -> None:
         self._state.session.active_layer = layer_index
@@ -270,13 +282,51 @@ class AnnotatorController:
         self._state.tool.selector_auto_smooth = enabled
         self._state.notify("tool")
 
-    def set_overwrite_annotations(self, enabled: bool) -> None:
-        self._state.tool.overwrite_annotations = enabled
-        self._state.notify("tool")
-
     def set_fill_all(self, enabled: bool) -> None:
         self._state.tool.fill_all = enabled
         self._state.notify("tool")
+
+    def set_eraser_size(self, size: int) -> None:
+        self._state.tool.eraser_size = max(1, size)
+        self._state.notify("tool")
+        if (
+            self._state.tool.active == "erase"
+            and not self._state.tool.is_drawing
+            and self._last_mouse_pos is not None
+            and self._document is not None
+        ):
+            px, py = self._last_mouse_pos
+            preview = compute_pen_mask(
+                self._document.height, self._document.width,
+                px, py, self._state.tool.eraser_size,
+            )
+            self._viewer.set_tool_preview(preview, (200, 200, 200))
+
+    def set_eraser_all_layers(self, enabled: bool) -> None:
+        self._state.tool.eraser_all_layers = enabled
+        self._state.notify("tool")
+
+    def toggle_layer_lock(self, layer_index: int) -> None:
+        """Toggle the locked state of a layer."""
+        locked = self._state.session.locked_layers
+        if layer_index in locked:
+            locked.discard(layer_index)
+        else:
+            locked.add(layer_index)
+        self._state.notify("session")
+
+    def is_layer_locked(self, layer_index: int) -> bool:
+        return layer_index in self._state.session.locked_layers
+
+    def toggle_layer_visibility(self, layer_index: int, visible: bool) -> None:
+        """Show or hide a layer's annotation mask."""
+        hidden = self._state.session.hidden_layers
+        if visible:
+            hidden.discard(layer_index)
+        else:
+            hidden.add(layer_index)
+        self._sync_annotation_overlay()
+        self._state.notify("session")
 
     # ------------------------------------------------------------------
     # Zoom
@@ -291,6 +341,7 @@ class AnnotatorController:
         self._state.view.zoom = new_zoom
         self._state.view.center_pos = c
         self._viewer.set_zoom(new_zoom, c)
+        self._state.notify("view")
 
     def zoom_out(self, center: Optional[tuple[float, float]] = None) -> None:
         zoom = self._state.view.zoom
@@ -301,6 +352,18 @@ class AnnotatorController:
         self._state.view.zoom = new_zoom
         self._state.view.center_pos = c
         self._viewer.set_zoom(new_zoom, c)
+        self._state.notify("view")
+
+    def zoom_fit(self) -> None:
+        """Reset zoom to 1× (fit to window)."""
+        self._state.view.zoom = 1
+        self._state.view.center_pos = None
+        self._viewer.set_zoom(1)
+        self._state.notify("view")
+
+    def get_zoom_percent(self) -> int:
+        """Return the current zoom as a percentage (100 = 1×)."""
+        return self._state.view.zoom * 100
 
     # ------------------------------------------------------------------
     # View toggles
@@ -325,6 +388,11 @@ class AnnotatorController:
             self._viewer.set_missing_pixels_visible(None, False)
         self._state.notify("view")
 
+    def toggle_show_grid(self, visible: bool) -> None:
+        self._state.view.show_grid = visible
+        self._viewer.set_grid_visible(visible)
+        self._state.notify("view")
+
     def toggle_annotations_visible(self, visible: bool) -> None:
         self._viewer.set_annotations_visible(visible)
         if not visible:
@@ -343,13 +411,24 @@ class AnnotatorController:
             self._sync_annotation_overlay()
             self._notify_progress()
 
+    def erase_all(self) -> None:
+        """Clear every annotation on the current image (undoable)."""
+        if not self._document:
+            return
+        self._document.clear_all_annotations()
+        self._image_repo.save_annotations(self._document, self._current_filename)
+        self._sync_annotation_overlay()
+        self._notify_progress()
+
     # ------------------------------------------------------------------
     # Autolabeling
     # ------------------------------------------------------------------
 
     def run_autolabel(self, plugin_id: str) -> Optional[str]:
-        """Run *plugin_id* on the current document.
+        """Run *plugin_id* on the current document (background-thread safe).
 
+        Only performs the heavy model inference and saves annotations.
+        Call ``finalize_autolabel()`` on the main thread afterwards.
         Returns an error message string on failure, or ``None`` on success.
         """
         if not self._document or not self._metadata:
@@ -362,9 +441,15 @@ class AnnotatorController:
         self._image_repo.save_annotations(self._document, self._current_filename)
         if self._time_tracker:
             self._time_tracker.reset()
+        return None
+
+    def finalize_autolabel(self) -> None:
+        """Refresh the viewer and progress after a successful autolabel run.
+
+        Must be called on the main (Qt) thread.
+        """
         self._sync_annotation_overlay()
         self._notify_progress()
-        return None
 
     # ------------------------------------------------------------------
     # Layers reconfiguration
@@ -413,8 +498,14 @@ class AnnotatorController:
         if not self._document or button != "left":
             return
         tool = self._state.tool
+        layer = self._state.session.active_layer
+        if tool.active != "erase" and layer in self._state.session.locked_layers:
+            return
         if tool.active == "pen":
             self._pen_draw(px, py)
+            tool.is_drawing = True
+        elif tool.active == "erase":
+            self._erase_draw(px, py)
             tool.is_drawing = True
         elif tool.active == "selector":
             tool.is_drawing = True
@@ -429,6 +520,9 @@ class AnnotatorController:
         if self._state.tool.active == "pen" and self._state.tool.is_drawing:
             self._commit_annotation()
             self._state.tool.is_drawing = False
+        elif self._state.tool.active == "erase" and self._state.tool.is_drawing:
+            self._commit_erase()
+            self._state.tool.is_drawing = False
 
     def _handle_mouse_move(self, px: int, py: int) -> None:
         self._last_mouse_pos = (px, py)
@@ -439,17 +533,27 @@ class AnnotatorController:
         color = self._layer_configs[layer].color_rgb
 
         if tool.active == "pen" and tool.is_drawing:
+            self._viewer.set_tool_preview(None, color)
             self._pen_draw(px, py)
         elif tool.active == "pen":
             preview = compute_pen_mask(
                 self._document.height, self._document.width, px, py, tool.pen_size
             )
             self._viewer.set_tool_preview(preview, color)
+        elif tool.active == "erase" and tool.is_drawing:
+            self._viewer.set_tool_preview(None, (200, 200, 200))
+            self._erase_draw(px, py)
+        elif tool.active == "erase":
+            preview = compute_pen_mask(
+                self._document.height, self._document.width, px, py, tool.eraser_size
+            )
+            self._viewer.set_tool_preview(preview, (200, 200, 200))
         elif tool.active in ("selector", "fill"):
             preview = compute_pen_mask(
                 self._document.height, self._document.width, px, py, 1
             )
             self._viewer.set_tool_preview(preview, color)
+        self._notify_status()
 
     def _handle_scroll(
         self,
@@ -481,12 +585,16 @@ class AnnotatorController:
         elif key == "Plus":
             if tool.active == "pen":
                 self.set_pen_size(tool.pen_size + 1)
+            elif tool.active == "erase":
+                self.set_eraser_size(tool.eraser_size + 1)
             elif tool.active == "selector":
                 self.set_selector_threshold(tool.selector_threshold + 1)
 
         elif key == "Minus":
             if tool.active == "pen":
                 self.set_pen_size(tool.pen_size - 1)
+            elif tool.active == "erase":
+                self.set_eraser_size(tool.eraser_size - 1)
             elif tool.active == "selector":
                 self.set_selector_threshold(tool.selector_threshold - 1)
 
@@ -503,13 +611,14 @@ class AnnotatorController:
             mask = self._state.session.selection_mask
             if mask is not None and self._document is not None:
                 layer = self._state.session.active_layer
-                annotated = (
-                    None
-                    if tool.overwrite_annotations
-                    else self._document.get_other_annotations_mask(layer)
-                )
+                locked = self._state.session.locked_layers
+                locked_mask = self._document.get_locked_other_annotations_mask(layer, locked)
+                annotated = locked_mask if np.any(locked_mask) else None
                 self._state.session.selection_mask = expand_mask(mask, annotated)
                 self._sync_selection_mask()
+
+        elif key == "E":
+            self.select_tool("erase")
 
         elif key == "R" and tool.active == "selector" and tool.is_drawing:
             mask = self._state.session.selection_mask
@@ -543,9 +652,15 @@ class AnnotatorController:
             cur if cur is not None else np.zeros_like(pen_mask),
             pen_mask,
         )
-        if not tool.overwrite_annotations:
-            annotated = doc.get_other_annotations_mask(self._state.session.active_layer)
-            merged = apply_overwrite_guard(merged, annotated)
+        layer = self._state.session.active_layer
+        locked = self._state.session.locked_layers
+        # Exclude pixels blocked by locked other layers (won't be committed).
+        locked_mask = doc.get_locked_other_annotations_mask(layer, locked)
+        if np.any(locked_mask):
+            merged = apply_overwrite_guard(merged, locked_mask)
+        # Exclude pixels already annotated in the current layer — the mask
+        # shows only the *new* pixels that will be added.
+        merged = apply_overwrite_guard(merged, doc.annotations[layer])
         self._state.session.selection_mask = merged
         self._sync_selection_mask()
 
@@ -553,7 +668,7 @@ class AnnotatorController:
         doc = self._document
         tool = self._state.tool
         mask = doc.compute_similarity_mask(
-            px, py, tool.selector_threshold, tool.overwrite_annotations
+            px, py, tool.selector_threshold, ignore_annotations=True
         )
         if tool.selector_auto_smooth:
             mask = smooth_mask(mask)
@@ -570,17 +685,50 @@ class AnnotatorController:
         self._autolabel.end_correction(doc.annotations)
         self._post_annotation_commit(layer)
 
+    def _erase_draw(self, px: int, py: int) -> None:
+        """Accumulate eraser brush strokes into the session selection mask."""
+        doc = self._document
+        tool = self._state.tool
+        erase_mask = compute_pen_mask(doc.height, doc.width, px, py, tool.eraser_size)
+        cur = self._state.session.selection_mask
+        merged = cv2.bitwise_or(
+            cur if cur is not None else np.zeros_like(erase_mask),
+            erase_mask,
+        )
+        # Only show pixels that will actually be erased: annotated in at
+        # least one unlocked layer. Locked-layer-only and unannotated
+        # pixels are excluded so the preview reflects the real delta.
+        locked = self._state.session.locked_layers
+        erasable = np.zeros_like(merged)
+        for i in range(doc.num_layers):
+            if i not in locked:
+                erasable = cv2.bitwise_or(erasable, doc.annotations[i])
+        display = cv2.bitwise_and(merged, erasable)
+        self._state.session.selection_mask = merged
+        self._viewer.set_selection_mask(display, (200, 200, 200))
+
+    def _commit_erase(self) -> None:
+        """Apply the accumulated erase mask to all unlocked layers."""
+        mask = self._state.session.selection_mask
+        if mask is None:
+            return
+        doc = self._document
+        locked = self._state.session.locked_layers
+        layer = self._state.session.active_layer
+        doc.erase_mask_unlocked(mask, locked)
+        self._state.session.selection_mask = None
+        self._sync_selection_mask()
+        self._post_annotation_commit(layer)
+
     def _commit_annotation(self) -> None:
         mask = self._state.session.selection_mask
         if mask is None:
             return
         doc = self._document
         layer = self._state.session.active_layer
-        if not self._state.tool.overwrite_annotations:
-            annotated = doc.get_other_annotations_mask(layer)
-            mask = apply_overwrite_guard(mask, annotated)
+        locked = self._state.session.locked_layers
         self._autolabel.begin_correction(doc.annotations)
-        doc.annotate_mask(mask, layer)
+        doc.annotate_mask_respecting_locks(mask, layer, locked)
         self._autolabel.end_correction(doc.annotations)
         self._state.session.selection_mask = None
         self._sync_selection_mask()
@@ -615,9 +763,13 @@ class AnnotatorController:
         layer = self._state.session.active_layer
         show_others = self._state.view.show_other_layers
         rgba = build_annotation_rgba(
-            self._document.annotations, colors, layer, show_others
+            self._document.annotations, colors, layer, show_others,
+            hidden_layers=self._state.session.hidden_layers,
         )
         self._viewer.set_annotation_overlay(rgba)
+        if self._state.view.show_missing_pixels:
+            mask = self._document.get_missing_annotations_mask()
+            self._viewer.set_missing_pixels_visible(mask, True)
 
     def _sync_selection_mask(self) -> None:
         mask = self._state.session.selection_mask
@@ -636,3 +788,27 @@ class AnnotatorController:
             progress = self._document.get_progress()
             for cb in self._on_progress_changed:
                 cb(progress)
+
+    def _notify_status(self) -> None:
+        for cb in self._on_status_changed:
+            cb()
+
+    # ------------------------------------------------------------------
+    # Status bar info
+    # ------------------------------------------------------------------
+
+    @property
+    def current_filename(self) -> Optional[str]:
+        return self._current_filename
+
+    @property
+    def image_dimensions(self) -> tuple[int, int]:
+        return self._image_dimensions
+
+    @property
+    def mouse_position(self) -> Optional[tuple[int, int]]:
+        return self._last_mouse_pos
+
+    @property
+    def active_tool_name(self) -> str:
+        return self._state.tool.active.capitalize()

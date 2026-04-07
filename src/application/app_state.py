@@ -32,11 +32,11 @@ import numpy as np
 @dataclass
 class ToolState:
     """Settings for the currently active annotation tool."""
-    active: str = "pen"                  # "pen" | "selector" | "fill"
-    pen_size: int = 1
+    active: str = "selector"              # "pen" | "selector" | "fill" | "erase"
+    pen_size: int = 5
+    eraser_size: int = 5
     selector_threshold: int = 32
     selector_auto_smooth: bool = True
-    overwrite_annotations: bool = False
     fill_all: bool = False
     is_drawing: bool = False
     selector_origin: Optional[tuple[int, int]] = None
@@ -50,6 +50,7 @@ class ViewState:
     show_image: bool = True
     show_other_layers: bool = True
     show_missing_pixels: bool = False
+    show_grid: bool = True
 
 
 @dataclass
@@ -58,6 +59,8 @@ class SessionState:
     active_layer: int = 0
     selection_mask: Optional[np.ndarray] = None
     tool_preview_mask: Optional[np.ndarray] = None
+    locked_layers: set = field(default_factory=set)  # set of locked layer indices
+    hidden_layers: set = field(default_factory=set)  # set of hidden layer indices
 
 
 @dataclass
@@ -76,17 +79,20 @@ class ToolbarState:
     """
     # -- Tool settings --------------------------------------------------
     active_tool: str = "pen"
-    pen_size: int = 1
+    pen_size: int = 5
+    eraser_size: int = 5
     selector_threshold: int = 32
     selector_auto_smooth: bool = True
-    overwrite_annotations: bool = False
     fill_all: bool = False
     # -- Session --------------------------------------------------------
     active_layer: int = 0
+    locked_layers: set = field(default_factory=set)
+    hidden_layers: set = field(default_factory=set)
     # -- View toggles ---------------------------------------------------
     show_image: bool = True
     show_other_layers: bool = True
     show_missing_pixels: bool = False
+    show_grid: bool = True
 
 
 # ------------------------------------------------------------------

@@ -92,6 +92,8 @@ class QtImageAnnotationViewer(QWidget):
         self._q_tool:        Optional[QGraphicsPixmapItem] = None
         self._q_grid:        Optional[QGraphicsPixmapItem] = None
 
+        self._grid_visible: bool = True
+
         # Cursor cache: {(tool_name, (r, g, b)): QCursor}
         self._cursor_cache: dict[tuple, QCursor] = {}
 
@@ -414,11 +416,15 @@ class QtImageAnnotationViewer(QWidget):
         h = int(px.height() * self._zoom)
         self._scene.setSceneRect(0, 0, w, h)
 
+    def set_grid_visible(self, visible: bool) -> None:
+        self._grid_visible = visible
+        self._update_grid()
+
     def _update_grid(self) -> None:
         if self._q_image is None:
             return
         zoom = self._zoom
-        if zoom < 5:
+        if zoom < 3 or not self._grid_visible:
             if self._q_grid:
                 self._scene.removeItem(self._q_grid)
                 self._q_grid = None

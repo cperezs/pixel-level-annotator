@@ -5,6 +5,7 @@ no Qt dependencies, and no domain state accessed here.  This makes every
 function trivially unit-testable.
 """
 from __future__ import annotations
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -81,6 +82,7 @@ def build_annotation_rgba(
     active_layer: int,
     show_other_layers: bool,
     opacity: int = 128,
+    hidden_layers: Optional[set] = None,
 ) -> np.ndarray:
     """Composite all visible annotation layers into a single RGBA image.
 
@@ -101,6 +103,8 @@ def build_annotation_rgba(
     composite = np.zeros((h, w, 4), dtype=np.uint8)
 
     for i in range(n):
+        if hidden_layers and i in hidden_layers:
+            continue
         if i != active_layer and not show_other_layers:
             continue
         mask = annotations[i] > 0

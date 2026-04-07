@@ -117,7 +117,10 @@ if __name__ == "__main__":
     viewer_class = _resolve_viewer(backend)
 
     from presentation.main_window import MainWindow
+    from presentation.style import GLOBAL_STYLESHEET
+
     app = QApplication(sys.argv)
+    app.setStyleSheet(GLOBAL_STYLESHEET)
     window = MainWindow(viewer_class=viewer_class)
     window.show()
     sys.exit(app.exec())

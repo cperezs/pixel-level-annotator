@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 _RESOURCES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "resources")
 _TOOL_CURSOR_FILES = {"pen": "pen.png", "selector": "wand.png", "fill": "fill.png"}
 
-_GRID_MIN_ZOOM = 8   # show pixel grid when zoom >= this value
+_GRID_MIN_ZOOM = 3   # show pixel grid when zoom >= this value
 _STRIDE = 4 * 4      # bytes per vertex: 4 float32 components (pos.xy, uv.xy)
 
 # Layer draw-order keys (lowest first)
@@ -128,11 +128,27 @@ uniform vec2  u_screen;
 in  vec2 v_uv;
 out vec4 frag;
 void main() {
-    vec2 s   = v_uv * u_screen;
-    vec2 img = (s - u_pan) / u_zoom;
-    vec2 d   = min(fract(img), 1.0 - fract(img));  // dist from nearest grid line
-    float lw = 0.5 / u_zoom;                        // half a screen pixel in image space
-    if (d.x > lw && d.y > lw) discard;
+    // Reconstruct screen-space fragment centre (logical pixels, y-down).
+    vec2 s = v_uv * u_screen;
+
+    // Draw a 1-screen-pixel-wide grid at every image-pixel boundary.
+    //
+    // A fragment is on a grid line when its screen-pixel footprint [s-0.5, s+0.5)
+    // straddles an image-pixel boundary (integer image coordinate).
+    // Equivalent condition: floor(img_hi) != floor(img_lo)
+    //   where img_lo / img_hi are the image-space coords of the pixel's two edges.
+    //
+    // A tiny negative bias (-eps) on both edges breaks the tie that occurs when
+    // a grid line falls exactly halfway between two fragment centres (which happens
+    // whenever zoom is a whole number and pan is integer-aligned).  Without it,
+    // such lines are either doubled or skipped entirely.
+    float eps = 1.0 / (u_zoom * 8.0);
+    vec2 img_lo = (s - 0.5 - u_pan) / u_zoom - eps;
+    vec2 img_hi = (s + 0.5 - u_pan) / u_zoom - eps;
+
+    if (floor(img_hi.x) == floor(img_lo.x) &&
+        floor(img_hi.y) == floor(img_lo.y)) discard;
+
     frag = vec4(0.5, 0.5, 0.5, 0.7);
 }
 """
@@ -224,6 +240,22 @@ void main() {
     } else {
         frag = vec4(u_color, u_opacity);
     }
+}
+"""
+
+# Pulsing white glow overlay for unannotated (missing) pixels.
+# Opacity oscillates between ~0.1 and ~0.75 using a sine wave (~2.5 s period).
+_FRAG_GLOW_SRC = """
+#version 330 core
+uniform sampler2D u_tex;
+uniform float     u_time;
+in  vec2 v_uv;
+out vec4 frag;
+void main() {
+    float v = texture(u_tex, v_uv).r;
+    if (v < 0.01) discard;
+    float pulse = 0.10 + 0.65 * (0.5 + 0.5 * sin(u_time * 2.5));
+    frag = vec4(1.0, 1.0, 1.0, pulse);
 }
 """
 
@@ -445,6 +477,7 @@ class _GLCanvas(QOpenGLWidget):
         self._layers = layers
         self._img_w: int = 0
         self._img_h: int = 0
+        self._grid_visible: bool = True
 
         # GL objects — allocated in initializeGL()
         self._prog_rgba: int = 0
@@ -452,6 +485,7 @@ class _GLCanvas(QOpenGLWidget):
         self._prog_grid: int = 0
         self._prog_ann:  int = 0
         self._prog_sel:  int = 0
+        self._prog_glow: int = 0
         self._vao: int = 0
         self._vbo: int = 0
 
@@ -462,7 +496,7 @@ class _GLCanvas(QOpenGLWidget):
         self._anim_start: float = _time_module.monotonic()
         self._anim_time:  float = 0.0
         self._anim_timer = QTimer(self)
-        self._anim_timer.setInterval(150)  # ~6 fps
+        self._anim_timer.setInterval(150)  # ~6 fps — drives both marching-ants and glow
         self._anim_timer.timeout.connect(self._tick_animation)
 
         self.setMouseTracking(True)
@@ -490,6 +524,7 @@ class _GLCanvas(QOpenGLWidget):
             self._prog_grid = _link_program(_VERT_SRC, _FRAG_GRID_SRC)
             self._prog_ann  = _link_program(_VERT_SRC, _FRAG_ANN_SRC)
             self._prog_sel  = _link_program(_VERT_SRC, _FRAG_SEL_SRC)
+            self._prog_glow = _link_program(_VERT_SRC, _FRAG_GLOW_SRC)
         except RuntimeError:
             logger.exception("GL shader initialisation failed")
             return
@@ -552,12 +587,14 @@ class _GLCanvas(QOpenGLWidget):
                 self._draw_sel_layer(layer)
             elif layer.shader == "ann_border":
                 self._draw_ann_layer(layer)
+            elif layer.shader == "glow":
+                self._draw_glow_layer(layer)
             elif layer.fmt == "gray":
                 self._draw_mask_layer(layer)
             else:
                 self._draw_rgba_layer(layer)
 
-        if self._vp.zoom >= _GRID_MIN_ZOOM:
+        if self._grid_visible and self._vp.zoom >= _GRID_MIN_ZOOM:
             self._draw_grid()
 
     # ── Texture management ───────────────────────────────────────────────
@@ -574,10 +611,8 @@ class _GLCanvas(QOpenGLWidget):
         GL.glBindTexture(GL.GL_TEXTURE_2D, layer.tex_id)
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
-        # Use nearest-neighbour at high zoom to preserve crisp pixel edges
-        mag = GL.GL_NEAREST if self._vp.zoom >= 2 else GL.GL_LINEAR
-        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, mag)
-        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST)
 
         buf = np.ascontiguousarray(data)
 
@@ -716,20 +751,37 @@ class _GLCanvas(QOpenGLWidget):
         GL.glDrawArrays(GL.GL_TRIANGLES, 0, 6)
         GL.glBindVertexArray(0)
 
+    def _draw_glow_layer(self, layer: _LayerData) -> None:
+        """Pulsing white glow over unannotated pixels."""
+        if not self._draw_image_quad():
+            return
+        GL.glUseProgram(self._prog_glow)
+        GL.glActiveTexture(GL.GL_TEXTURE0)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, layer.tex_id)
+        GL.glUniform1i(GL.glGetUniformLocation(self._prog_glow, b"u_tex"), 0)
+        GL.glUniform1f(GL.glGetUniformLocation(self._prog_glow, b"u_time"), self._anim_time)
+        GL.glDrawArrays(GL.GL_TRIANGLES, 0, 6)
+        GL.glBindVertexArray(0)
+
     def _tick_animation(self) -> None:
         """Advance animation clock and request a repaint."""
         self._anim_time = _time_module.monotonic() - self._anim_start
         sel = self._layers.get(_L_SEL)
-        if sel and sel.visible:
+        missing = self._layers.get(_L_MISSING)
+        if (sel and sel.visible) or (missing and missing.visible):
             self.update()
 
     def start_animation(self) -> None:
-        """Start marching-ants timer (called when selection becomes visible)."""
+        """Start animation timer (drives marching-ants selection and missing-pixels glow)."""
         if not self._anim_timer.isActive():
             self._anim_timer.start()
 
     def stop_animation(self) -> None:
-        """Stop marching-ants timer (called when selection is hidden)."""
+        """Stop animation timer only when no animated layer needs it."""
+        sel = self._layers.get(_L_SEL)
+        missing = self._layers.get(_L_MISSING)
+        if (sel and sel.visible) or (missing and missing.visible):
+            return  # at least one animated layer still active — keep timer running
         self._anim_timer.stop()
 
     def _draw_grid(self) -> None:
@@ -782,8 +834,8 @@ class GLImageAnnotationViewer(QWidget):
         self._layers: dict[str, _LayerData] = {
             _L_BASE:    _LayerData(fmt="rgb",  shader="rgba",       opacity=1.0),
             _L_ANN:     _LayerData(fmt="rgba", shader="ann_border", opacity=0.5),
-            _L_MISSING: _LayerData(fmt="gray", shader="mask",       opacity=0.8,
-                                   color_rgb=(1.0, 0.2, 0.2), visible=False),
+            _L_MISSING: _LayerData(fmt="gray", shader="glow",       opacity=1.0,
+                                   color_rgb=(1.0, 1.0, 1.0), visible=False),
             _L_SEL:     _LayerData(fmt="gray", shader="sel_ants",   opacity=0.35,
                                    color_rgb=(1.0, 1.0, 1.0), visible=False),
             _L_TOOL:    _LayerData(fmt="gray", shader="mask",       opacity=0.4,
@@ -912,11 +964,16 @@ class GLImageAnnotationViewer(QWidget):
             layer.visible = False
             self._canvas.update()
             return
-        # Invert: annotated pixels = 0 (discarded), missing = 255 (highlighted)
-        layer.data = np.ascontiguousarray(cv2.bitwise_not(mask))
+        # mask already contains unannotated pixels = 255 (from get_missing_annotations_mask)
+        layer.data = np.ascontiguousarray(mask)
         layer.fmt = "gray"
         layer.dirty = True
         layer.visible = True
+        self._canvas.start_animation()
+        self._canvas.update()
+
+    def set_grid_visible(self, visible: bool) -> None:
+        self._canvas._grid_visible = visible
         self._canvas.update()
 
     # ── IImageAnnotationViewer — zoom / viewport ─────────────────────────
