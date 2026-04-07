@@ -231,6 +231,9 @@ class ImageDocument:
         This is orders of magnitude faster than the equivalent Python BFS on
         large images.
         """
+        if not (0 <= x < self.width and 0 <= y < self.height):
+            return np.zeros(self._gray.shape, dtype=np.uint8)
+        
         seed_value = int(self._gray[y, x])
 
         # Fast path: threshold ≥ 255 means every uint8 pixel is spectrally
