@@ -50,6 +50,8 @@ class ImageDocument:
         self._annotations = np.asarray(annotations, dtype=np.uint8)
         self._source_path = source_path
         self._undo_stack: deque[np.ndarray] = deque(maxlen=_MAX_UNDO)
+        # Greyscale cache — computed once; used by compute_similarity_mask.
+        self._gray: np.ndarray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
     # ------------------------------------------------------------------
     # Read-only properties
@@ -210,40 +212,57 @@ class ImageDocument:
         threshold: int,
         ignore_annotations: bool = False,
     ) -> np.ndarray:
-        """Flood-fill similarity mask originating from pixel (x, y).
+        """Return the 8-connected region of pixels spectrally similar to (x, y).
 
-        Pixels whose greyscale value differs from the seed by at most
-        *threshold* are included.  Already-annotated regions are treated as
-        hard boundaries unless *ignore_annotations* is True.
+        A pixel is *similar* when its greyscale value differs from the seed
+        by at most *threshold*.  Already-annotated regions act as hard
+        boundaries (barriers to flood propagation) unless *ignore_annotations*
+        is True.
+
+        Implementation
+        --------------
+        Rather than a Python-level BFS, the algorithm uses two C-level passes:
+
+        1. A vectorised NumPy comparison builds the full similarity bitmap in
+           a single O(H×W) operation — no Python loop per pixel.
+        2. ``cv2.connectedComponents`` (two-pass scanline, 8-connectivity)
+           extracts the connected region that contains the seed pixel.
+
+        This is orders of magnitude faster than the equivalent Python BFS on
+        large images.
         """
-        gray = cv2.cvtColor(self._image, cv2.COLOR_BGR2GRAY)
-        h, w = gray.shape
-        seed_value = int(gray[y, x])
+        seed_value = int(self._gray[y, x])
 
-        visited = np.zeros((h, w), dtype=bool)
-        result = np.zeros((h, w), dtype=np.uint8)
-        blocked = (
-            self.get_all_annotations_mask()
-            if not ignore_annotations
-            else np.zeros((h, w), dtype=np.uint8)
-        )
+        # Fast path: threshold ≥ 255 means every uint8 pixel is spectrally
+        # similar to the seed (|v − seed| ≤ 255 is always true).  Skip the
+        # similarity bitmap and use the unannotated region directly as the
+        # binary map for connected-component labelling.
+        if threshold >= 255:
+            if not ignore_annotations:
+                reachable = np.bitwise_not(self.get_all_annotations_mask())
+            else:
+                reachable = np.ones(self._gray.shape, dtype=np.uint8) * 255
+        else:
+            # 1. Vectorised similarity bitmap.
+            similar = (
+                np.abs(self._gray.astype(np.int16) - seed_value) <= threshold
+            ).astype(np.uint8)
 
-        queue = deque([(x, y)])
-        dirs = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
+            # 2. Zero out annotation-boundary pixels so they act as barriers.
+            if not ignore_annotations:
+                blocked = self.get_all_annotations_mask()
+                similar = np.where(blocked > 0, np.uint8(0), similar)
 
-        while queue:
-            cx, cy = queue.popleft()
-            if visited[cy, cx] or blocked[cy, cx]:
-                continue
-            visited[cy, cx] = True
-            result[cy, cx] = 255
-            for dx, dy in dirs:
-                nx, ny = cx + dx, cy + dy
-                if 0 <= nx < w and 0 <= ny < h and not visited[ny, nx]:
-                    if abs(int(gray[ny, nx]) - seed_value) <= threshold:
-                        queue.append((nx, ny))
+            reachable = similar
 
-        return result
+        # If the seed pixel is itself blocked or dissimilar, return an empty mask.
+        if reachable[y, x] == 0:
+            return np.zeros(self._gray.shape, dtype=np.uint8)
+
+        # 3. Label connected components; select the one containing the seed.
+        _, labels = cv2.connectedComponents(reachable, connectivity=8)
+        seed_label = int(labels[y, x])
+        return np.where(labels == seed_label, np.uint8(255), np.uint8(0))
 
     def get_progress(self) -> int:
         """Fraction of pixels annotated in any layer, as an integer percentage."""
@@ -271,6 +290,5 @@ class ImageDocument:
     def _clear_mask_from_other_layers(self, layer: int) -> None:
         """Remove pixels present in *layer* from all other layers."""
         inv = np.bitwise_not(self._annotations[layer])
-        for i in range(self.num_layers):
-            if i != layer:
-                self._annotations[i] = np.bitwise_and(self._annotations[i], inv)
+        other = np.arange(self.num_layers) != layer
+        self._annotations[other] = np.bitwise_and(self._annotations[other], inv)
