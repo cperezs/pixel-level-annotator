@@ -156,6 +156,7 @@ class ToolbarPanel(QWidget):
             btn.setChecked(True)
         self._update_tool_widget_states(tool)
 
+    # TODO: this method is not called
     def set_active_layer(self, layer_index: int) -> None:
         for i, btn in enumerate(self._q_layer_buttons):
             lc = self._layer_configs[i]
@@ -341,9 +342,6 @@ class ToolbarPanel(QWidget):
 
         if self._q_layer_buttons:
             self._q_layer_buttons[0].setChecked(True)
-            self._q_layer_buttons[0].setStyleSheet(
-                f"background-color: {layer_configs[0].color_hex}; font-weight: bold;"
-            )
 
     def _build_autolabel_section(self) -> None:
         self._layout.addWidget(QLabel("Autolabeling"))

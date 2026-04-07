@@ -405,7 +405,7 @@ class AnnotatorController:
             if dy > 0:
                 self.zoom_in(center=(px, py))
             else:
-                self.zoom_out()
+                self.zoom_out(center=(px, py))
 
     def _handle_key_press(self, key: str, mods: frozenset) -> None:
         if key == "Space":

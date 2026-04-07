@@ -15,7 +15,7 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QEvent, QObject
 from PyQt6.QtGui import QCursor, QImage, QMouseEvent, QPixmap, QColor
 from PyQt6.QtWidgets import (
     QGraphicsPixmapItem,
@@ -28,6 +28,21 @@ from PyQt6.QtWidgets import (
 from viewer.interface import IImageAnnotationViewer
 
 logger = logging.getLogger(__name__)
+
+
+class _GestureEventFilter(QObject):
+    """Captures QNativeGestureEvent (trackpad pinch) from a QGraphicsView viewport."""
+
+    def __init__(self, callback, parent=None) -> None:
+        super().__init__(parent)
+        self._callback = callback
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.NativeGesture:
+            self._callback(event)
+            return True
+        return super().eventFilter(obj, event)
+
 
 # Z-order constants (higher = on top)
 _Z_IMAGE       = 0
@@ -95,6 +110,11 @@ class QtImageAnnotationViewer(QWidget):
         self._view.wheelEvent        = self._on_wheel
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        # Pinch-to-zoom state
+        self._pinch_accum: float = 0.0
+        self._gesture_filter = _GestureEventFilter(self._on_native_gesture, self)
+        self._view.viewport().installEventFilter(self._gesture_filter)
 
     # ------------------------------------------------------------------
     # IImageAnnotationViewer — display API
@@ -194,6 +214,23 @@ class QtImageAnnotationViewer(QWidget):
         zoom: int,
         center: Optional[tuple[float, float]] = None,
     ) -> None:
+        old_zoom = self._zoom
+        hbar = self._view.horizontalScrollBar()
+        vbar = self._view.verticalScrollBar()
+
+        if center is not None:
+            # Capture the viewport position of the anchor pixel BEFORE the scale change.
+            # After rescaling we restore it so the pixel stays fixed on screen.
+            px, py = center
+            anchor_vx = px * old_zoom - hbar.value()
+            anchor_vy = py * old_zoom - vbar.value()
+        else:
+            # No anchor: keep the current view-centre centred after the zoom.
+            vw = self._view.viewport().width()
+            vh = self._view.viewport().height()
+            cx = (hbar.value() + vw // 2) / max(old_zoom, 1)
+            cy = (vbar.value() + vh // 2) / max(old_zoom, 1)
+
         self._zoom = zoom
         for item in (
             self._q_image,
@@ -206,8 +243,18 @@ class QtImageAnnotationViewer(QWidget):
                 item.setScale(zoom)
         self._update_scene_rect()
         self._update_grid()
+
         if center is not None:
-            self._scroll_to_center(center)
+            new_h = int(px * zoom - anchor_vx)
+            new_v = int(py * zoom - anchor_vy)
+        else:
+            vw = self._view.viewport().width()
+            vh = self._view.viewport().height()
+            new_h = int(cx * zoom) - vw // 2
+            new_v = int(cy * zoom) - vh // 2
+
+        hbar.setValue(max(hbar.minimum(), min(hbar.maximum(), new_h)))
+        vbar.setValue(max(vbar.minimum(), min(vbar.maximum(), new_v)))
 
     def get_zoom(self) -> int:
         return self._zoom
@@ -283,6 +330,38 @@ class QtImageAnnotationViewer(QWidget):
         for cb in self._cb_mouse_move:
             cb(px, py)
 
+    def _on_native_gesture(self, event) -> None:
+        """Handle trackpad pinch events and convert to zoom_in/zoom_out calls."""
+        try:
+            gesture_type = event.gestureType()
+        except AttributeError:
+            return
+
+        if gesture_type == Qt.NativeGestureType.BeginNativeGesture:
+            self._pinch_accum = 0.0
+            return
+
+        if gesture_type != Qt.NativeGestureType.ZoomNativeGesture:
+            return
+
+        self._pinch_accum += event.value()
+
+        # Fire one zoom step for every _PINCH_STEP accumulated.
+        _PINCH_STEP = 0.1
+        steps = int(self._pinch_accum / _PINCH_STEP)
+        if steps == 0:
+            return
+        self._pinch_accum -= steps * _PINCH_STEP
+
+        vp_pos = event.position().toPoint()
+        scene_pos = self._view.mapToScene(vp_pos)
+        px = int(scene_pos.x() / max(self._zoom, 1))
+        py = int(scene_pos.y() / max(self._zoom, 1))
+        dy = 120 if steps > 0 else -120
+        for _ in range(abs(steps)):
+            for cb in self._cb_scroll:
+                cb(dy, 0, px, py, frozenset({"ctrl"}))
+
     def _on_wheel(self, event) -> None:
         mods = _modifiers_frozenset(event.modifiers())
         dy = event.angleDelta().y()
@@ -326,17 +405,6 @@ class QtImageAnnotationViewer(QWidget):
         scene_pos = self._view.mapToScene(pos)
         zoom = max(self._zoom, 1)
         return int(scene_pos.x() / zoom), int(scene_pos.y() / zoom)
-
-    def _scroll_to_center(self, center: tuple[float, float]) -> None:
-        hbar = self._view.horizontalScrollBar()
-        vbar = self._view.verticalScrollBar()
-        cx, cy = center
-        vw = self._view.viewport().width()
-        vh = self._view.viewport().height()
-        target_h = int(cx * self._zoom) - vw // 2
-        target_v = int(cy * self._zoom) - vh // 2
-        hbar.setValue(max(hbar.minimum(), min(hbar.maximum(), target_h)))
-        vbar.setValue(max(vbar.minimum(), min(vbar.maximum(), target_v)))
 
     def _update_scene_rect(self) -> None:
         if self._q_image is None:
