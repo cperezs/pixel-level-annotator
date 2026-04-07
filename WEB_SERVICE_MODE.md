@@ -87,4 +87,4 @@ Cancelled requests receive:
 
 ## Testing
 
-The `frontend` folder contains a demo application to test the web service functionality from an HTML page.
+The `demo_frontend` folder contains a demo application to test the web service functionality from an HTML page.

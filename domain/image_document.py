@@ -1,0 +1,208 @@
+"""Image document — core domain entity.
+
+Holds the base image and per-layer annotation masks.  Contains only
+pure domain state and operations.  No file I/O, no Qt, no persistence.
+
+Persistence is the responsibility of ``infrastructure.ImageRepository``.
+"""
+from __future__ import annotations
+
+import cv2
+import numpy as np
+import logging
+from collections import deque
+
+logger = logging.getLogger(__name__)
+
+_MAX_UNDO = 20
+
+
+class ImageDocument:
+    """Domain entity for a loaded image with its annotation layers.
+
+    Responsibilities:
+    - Hold the base image array and per-layer annotation masks.
+    - Apply annotation edits (pen, fill, selector result).
+    - Maintain an undo stack.
+    - Answer domain queries (progress, similarity mask, etc.).
+
+    Everything else — file I/O, rendering, state management — lives in
+    the infrastructure, application and viewer layers respectively.
+    """
+
+    def __init__(
+        self,
+        image: np.ndarray,
+        annotations: np.ndarray,
+        source_path: str,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        image : np.ndarray
+            BGR image array of shape (H, W, C).
+        annotations : np.ndarray
+            Annotation masks of shape (N, H, W), dtype uint8, values 0 or 255.
+        source_path : str
+            Original file path (kept as reference; no I/O performed here).
+        """
+        self._image = image
+        self._annotations = np.asarray(annotations, dtype=np.uint8)
+        self._source_path = source_path
+        self._undo_stack: deque[np.ndarray] = deque(maxlen=_MAX_UNDO)
+
+    # ------------------------------------------------------------------
+    # Read-only properties
+    # ------------------------------------------------------------------
+
+    @property
+    def image(self) -> np.ndarray:
+        """Base image in BGR format, shape (H, W, C)."""
+        return self._image
+
+    @property
+    def annotations(self) -> np.ndarray:
+        """All annotation layers, shape (N, H, W)."""
+        return self._annotations
+
+    @property
+    def source_path(self) -> str:
+        return self._source_path
+
+    @property
+    def height(self) -> int:
+        return int(self._image.shape[0])
+
+    @property
+    def width(self) -> int:
+        return int(self._image.shape[1])
+
+    @property
+    def num_layers(self) -> int:
+        return len(self._annotations)
+
+    # ------------------------------------------------------------------
+    # Annotation mutations
+    # ------------------------------------------------------------------
+
+    def annotate_mask(self, mask: np.ndarray, layer: int) -> None:
+        """Paint *mask* into *layer*, clearing those pixels in every other layer."""
+        self._push_undo()
+        binary = np.where(mask > 0, np.uint8(255), np.uint8(0))
+        self._annotations[layer] = np.maximum(self._annotations[layer], binary)
+        self._clear_mask_from_other_layers(layer)
+
+    def set_from_labelmap(self, label_map: np.ndarray) -> None:
+        """Replace all annotations from a 2-D integer label map.
+
+        Each pixel value in *label_map* is taken as a layer index
+        (0 … num_layers - 1).
+        """
+        self._push_undo()
+        for i in range(self.num_layers):
+            self._annotations[i] = np.where(label_map == i, 255, 0).astype(np.uint8)
+
+    def undo(self) -> bool:
+        """Revert to the previous annotation state.
+
+        Returns True if a state was available to revert to.
+        """
+        if not self._undo_stack:
+            return False
+        self._annotations = self._undo_stack.pop()
+        return True
+
+    # ------------------------------------------------------------------
+    # Domain queries
+    # ------------------------------------------------------------------
+
+    def get_other_annotations_mask(self, layer: int) -> np.ndarray:
+        """OR-combination of all layers except *layer*."""
+        other = np.delete(self._annotations, layer, axis=0)
+        return np.bitwise_or.reduce(other, axis=0)
+
+    def get_all_annotations_mask(self) -> np.ndarray:
+        """OR-combination of all layers."""
+        return np.bitwise_or.reduce(self._annotations, axis=0)
+
+    def get_missing_annotations_mask(self) -> np.ndarray:
+        """Pixels that have no annotation in any layer."""
+        return np.bitwise_not(self.get_all_annotations_mask())
+
+    def get_unannotated_mask(self, x: int, y: int, connected: bool = True) -> np.ndarray:
+        """Return a mask of unannotated pixels.
+
+        When *connected* is True, only pixels reachable from (x, y) via a
+        flood-fill (no colour threshold) are returned.  Otherwise every
+        unannotated pixel in the image is included.
+        """
+        if connected:
+            return self.compute_similarity_mask(x, y, threshold=255, ignore_annotations=False)
+        return self.get_missing_annotations_mask()
+
+    def compute_similarity_mask(
+        self,
+        x: int,
+        y: int,
+        threshold: int,
+        ignore_annotations: bool = False,
+    ) -> np.ndarray:
+        """Flood-fill similarity mask originating from pixel (x, y).
+
+        Pixels whose greyscale value differs from the seed by at most
+        *threshold* are included.  Already-annotated regions are treated as
+        hard boundaries unless *ignore_annotations* is True.
+        """
+        gray = cv2.cvtColor(self._image, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape
+        seed_value = int(gray[y, x])
+
+        visited = np.zeros((h, w), dtype=bool)
+        result = np.zeros((h, w), dtype=np.uint8)
+        blocked = (
+            self.get_all_annotations_mask()
+            if not ignore_annotations
+            else np.zeros((h, w), dtype=np.uint8)
+        )
+
+        queue = deque([(x, y)])
+        dirs = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
+
+        while queue:
+            cx, cy = queue.popleft()
+            if visited[cy, cx] or blocked[cy, cx]:
+                continue
+            visited[cy, cx] = True
+            result[cy, cx] = 255
+            for dx, dy in dirs:
+                nx, ny = cx + dx, cy + dy
+                if 0 <= nx < w and 0 <= ny < h and not visited[ny, nx]:
+                    if abs(int(gray[ny, nx]) - seed_value) <= threshold:
+                        queue.append((nx, ny))
+
+        return result
+
+    def get_progress(self) -> int:
+        """Fraction of pixels annotated in any layer, as an integer percentage."""
+        combined = np.any(self._annotations, axis=0)
+        total = self.height * self.width
+        annotated = int(np.count_nonzero(combined))
+        pct = int(annotated / total * 100) if total else 0
+        # Clamp to 99 % if not every single pixel is covered (rounding artefact).
+        if pct == 100 and annotated < total:
+            pct = 99
+        return pct
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _push_undo(self) -> None:
+        self._undo_stack.append(self._annotations.copy())
+
+    def _clear_mask_from_other_layers(self, layer: int) -> None:
+        """Remove pixels present in *layer* from all other layers."""
+        inv = np.bitwise_not(self._annotations[layer])
+        for i in range(self.num_layers):
+            if i != layer:
+                self._annotations[i] = np.bitwise_and(self._annotations[i], inv)

@@ -1,7 +1,7 @@
 """Sample autolabeling plugin — divides the image into four horizontal stripes."""
 
 import numpy as np
-from plugin_base import AutolabelPlugin
+from application.plugin_base import AutolabelPlugin
 
 
 class SamplePlugin(AutolabelPlugin):

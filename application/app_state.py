@@ -1,0 +1,107 @@
+"""Application state model with change notification.
+
+Three kinds of state are distinguished to prevent uncontrolled coupling:
+
+``ToolState``
+    Which annotation tool is active and its settings (pen size, threshold…).
+    Owned by the controller; reflected in the toolbar.
+
+``ViewState``
+    Zoom level, pan centre, visibility flags.  Pure rendering/view concerns
+    that do not belong to the domain.
+
+``SessionState``
+    State tied to the currently loaded image: active layer, working masks.
+
+``AppState`` is the observable aggregate.  Any component can *subscribe* to
+a named topic and will be notified whenever ``AppState.notify(topic)`` is
+called for that topic.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+
+import numpy as np
+
+
+# ------------------------------------------------------------------
+# State value objects (plain dataclasses — no notification logic)
+# ------------------------------------------------------------------
+
+@dataclass
+class ToolState:
+    """Settings for the currently active annotation tool."""
+    active: str = "pen"                  # "pen" | "selector" | "fill"
+    pen_size: int = 1
+    selector_threshold: int = 32
+    selector_auto_smooth: bool = True
+    overwrite_annotations: bool = False
+    fill_all: bool = False
+    is_drawing: bool = False
+    selector_origin: Optional[tuple[int, int]] = None
+
+
+@dataclass
+class ViewState:
+    """Visual-presentation settings (no domain semantics)."""
+    zoom: int = 5
+    center_pos: Optional[tuple[float, float]] = None
+    show_image: bool = True
+    show_other_layers: bool = True
+    show_missing_pixels: bool = False
+
+
+@dataclass
+class SessionState:
+    """Transient state for the current annotation session."""
+    active_layer: int = 0
+    selection_mask: Optional[np.ndarray] = None
+    tool_preview_mask: Optional[np.ndarray] = None
+
+
+# ------------------------------------------------------------------
+# Observable aggregate
+# ------------------------------------------------------------------
+
+class AppState:
+    """Central application state with pub/sub change notification.
+
+    Usage example::
+
+        state = AppState(layer_names=["bg", "fg"])
+        state.subscribe("tool", my_callback)
+        state.tool.pen_size = 5
+        state.notify("tool")          # triggers my_callback
+
+    The state object does *not* copy or snapshot values — subscribers are
+    responsible for reading the current state when called back.
+    """
+
+    def __init__(self, layer_names: list[str]) -> None:
+        self.layer_names: list[str] = list(layer_names)
+        self.tool = ToolState()
+        self.view = ViewState()
+        self.session = SessionState()
+        self._listeners: dict[str, list[Callable[[], None]]] = {}
+
+    # ------------------------------------------------------------------
+    # Pub/sub
+    # ------------------------------------------------------------------
+
+    def subscribe(self, topic: str, callback: Callable[[], None]) -> None:
+        """Register *callback* to be called whenever *topic* is notified."""
+        self._listeners.setdefault(topic, []).append(callback)
+
+    def notify(self, *topics: str) -> None:
+        """Fire all callbacks registered for each of *topics*.
+
+        A callback is called at most once per ``notify`` call even if it
+        is registered under multiple topics that are all notified at once.
+        """
+        seen: set[Callable] = set()
+        for topic in topics:
+            for cb in self._listeners.get(topic, []):
+                if cb not in seen:
+                    seen.add(cb)
+                    cb()

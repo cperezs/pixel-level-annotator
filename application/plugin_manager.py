@@ -6,7 +6,7 @@ import logging
 import importlib
 import numpy as np
 
-from plugin_base import AutolabelPlugin
+from application.plugin_base import AutolabelPlugin
 
 
 class PluginManager:

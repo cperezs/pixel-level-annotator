@@ -30,7 +30,7 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
-from plugin_base import AutolabelPlugin
+from application.plugin_base import AutolabelPlugin
 
 _PATCH_SIZE = 256
 _MARGIN = 5
