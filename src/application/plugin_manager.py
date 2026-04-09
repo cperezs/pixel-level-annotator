@@ -115,26 +115,16 @@ class PluginManager:
     # ------------------------------------------------------------------
 
     def update_layers(self, layer_names: list[str]):
-        """Recalculate plugin compatibility after layers change."""
+        """Update the current layer context.
+
+        All discovered plugins are made available regardless of their
+        declared layer names — compatibility is now determined entirely
+        by the user-configured layer mapping in the UI.
+        """
         self._current_layers = list(layer_names)
-        self._compatible_plugins = []
-
-        current_set = set(self._current_layers)
-
+        self._compatible_plugins = list(self._plugins)
         for plugin in self._plugins:
-            plugin_set = set(plugin.supported_layers)
-            if plugin_set == current_set:
-                self._compatible_plugins.append(plugin)
-                self._logger.info(
-                    "Plugin '%s' is compatible with current layers.", plugin.id
-                )
-            else:
-                self._logger.debug(
-                    "Plugin '%s' incompatible. Plugin layers: %s, App layers: %s",
-                    plugin.id,
-                    plugin.supported_layers,
-                    self._current_layers,
-                )
+            self._logger.info("Plugin '%s' available.", plugin.id)
 
     def get_compatible_plugins(self) -> list[AutolabelPlugin]:
         """Return the list of currently compatible plugins."""
@@ -151,8 +141,22 @@ class PluginManager:
     # Execution & validation
     # ------------------------------------------------------------------
 
-    def run_plugin(self, plugin: AutolabelPlugin, image_array: np.ndarray):
+    def run_plugin(
+        self,
+        plugin: AutolabelPlugin,
+        image_array: np.ndarray,
+        plugin_config=None,
+    ):
         """Execute *plugin* on *image_array* and validate the output.
+
+        Parameters
+        ----------
+        plugin_config
+            Optional ``PluginConfig`` object (duck-typed).  When provided,
+            ``plugin_config.layer_mapping`` overrides automatic name-based
+            layer matching and ``plugin_config.conflict_strategy`` /
+            ``plugin_config.layer_priorities`` control how per-pixel
+            predictions are resolved.
 
         Returns
         -------
@@ -163,7 +167,12 @@ class PluginManager:
 
         # --- run ----------------------------------------------------------
         try:
-            result = plugin.run(image_array)
+            if plugin_config is not None and hasattr(plugin, 'run_with_config'):
+                strategy = getattr(plugin_config, 'conflict_strategy', 'argmax')
+                priorities = getattr(plugin_config, 'layer_priorities', {})
+                result = plugin.run_with_config(image_array, strategy, priorities)
+            else:
+                result = plugin.run(image_array)
         except Exception as e:
             self._logger.error("Plugin '%s' execution failed: %s", plugin.id, e)
             return None, f"Plugin execution failed: {e}"
@@ -177,7 +186,8 @@ class PluginManager:
             return None, error
 
         # --- map plugin indices → app indices -----------------------------
-        mapped = self._map_layers(result, plugin)
+        user_mapping = getattr(plugin_config, 'layer_mapping', None) if plugin_config else None
+        mapped = self._map_layers(result, plugin, user_mapping)
         if mapped is None:
             msg = "Failed to map plugin layers to application layers."
             self._logger.error(msg)
@@ -208,21 +218,34 @@ class PluginManager:
             return f"Invalid layer indices in output: {invalid.tolist()}"
         return None
 
-    def _map_layers(self, result, plugin):
-        """Map plugin layer indices to app layer indices by name."""
-        app_lookup = {name: idx for idx, name in enumerate(self._current_layers)}
+    def _map_layers(self, result, plugin, user_mapping: dict | None = None):
+        """Map plugin layer indices to app layer indices.
 
-        mapping = {}
-        for plugin_idx, layer_name in enumerate(plugin.supported_layers):
-            if layer_name not in app_lookup:
+        When *user_mapping* is ``None`` (no configuration saved) every layer
+        is considered unassigned and the output is all-zero.
+        When a layer maps to ``None`` (explicit \"-- No assignment --\") those
+        pixels are skipped and stay at 0 in the output.
+        """
+        # Sentinel: a value that doesn't match any app layer index so that
+        # unassigned pixels produce no annotation in set_from_labelmap.
+        app_lookup = {name: idx for idx, name in enumerate(self._current_layers)}
+        _UNASSIGNED = len(self._current_layers)
+        mapped = np.full_like(result, fill_value=_UNASSIGNED)
+
+        if user_mapping is None:
+            # No mapping configured at all — nothing is assigned.
+            return mapped
+
+        for plugin_idx, plugin_layer_name in enumerate(plugin.supported_layers):
+            app_layer_name = user_mapping.get(plugin_layer_name)
+            if app_layer_name is None:
+                # Explicitly unassigned — keep sentinel (no annotation).
+                continue
+            if app_layer_name not in app_lookup:
                 self._logger.error(
-                    "Plugin layer '%s' not found in app layers.", layer_name
+                    "Layer '%s' not found in app layers.", app_layer_name
                 )
                 return None
-            mapping[plugin_idx] = app_lookup[layer_name]
-
-        mapped = np.zeros_like(result)
-        for plugin_idx, app_idx in mapping.items():
-            mapped[result == plugin_idx] = app_idx
+            mapped[result == plugin_idx] = app_lookup[app_layer_name]
 
         return mapped

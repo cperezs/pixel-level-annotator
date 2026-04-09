@@ -56,8 +56,15 @@ class AutolabelService:
         plugin_id: str,
         document: ImageDocument,
         metadata: ImageMetadata,
+        plugin_config=None,
     ) -> tuple[bool, Optional[str]]:
         """Run plugin *plugin_id* on *document* and record results in *metadata*.
+
+        Parameters
+        ----------
+        plugin_config
+            Optional ``PluginConfig`` object with layer mapping and conflict
+            resolution strategy.  When ``None`` the defaults are used.
 
         Returns
         -------
@@ -70,7 +77,7 @@ class AutolabelService:
         if plugin is None:
             return False, f"Unknown or incompatible plugin: {plugin_id}"
 
-        label_map, error = self._plugin_manager.run_plugin(plugin, document.image)
+        label_map, error = self._plugin_manager.run_plugin(plugin, document.image, plugin_config)
         if error:
             return False, error
 

@@ -26,6 +26,35 @@ import numpy as np
 
 
 # ------------------------------------------------------------------
+# Plugin configuration value object
+# ------------------------------------------------------------------
+
+@dataclass
+class PluginConfig:
+    """Per-plugin inference configuration set by the user.
+
+    Attributes
+    ----------
+    layer_mapping:
+        ``{plugin_layer_name -> app_layer_name}`` dict that overrides the
+        default name-based mapping.  When empty the plugin layer names are
+        matched to app layer names automatically.
+    conflict_strategy:
+        ``"argmax"`` (default) — assign each pixel to the layer with the
+        highest model probability.  ``"layer_priority"`` — assign each pixel
+        to the highest-priority layer (lowest priority number) whose model
+        probability ≥ 0.5; falls back to argmax when no layer exceeds the
+        threshold.
+    layer_priorities:
+        ``{plugin_layer_name -> priority_int}`` where 1 is the highest
+        priority.  Used only when ``conflict_strategy == "layer_priority"``.
+    """
+    layer_mapping: dict = field(default_factory=dict)
+    conflict_strategy: str = "argmax"
+    layer_priorities: dict = field(default_factory=dict)
+
+
+# ------------------------------------------------------------------
 # State value objects (plain dataclasses — no notification logic)
 # ------------------------------------------------------------------
 
@@ -118,6 +147,8 @@ class AppState:
         self.tool = ToolState()
         self.view = ViewState()
         self.session = SessionState()
+        # Per-plugin inference configuration saved by the user.
+        self.plugin_configs: dict[str, PluginConfig] = {}
         self._listeners: dict[str, list[Callable[[], None]]] = {}
 
     # ------------------------------------------------------------------

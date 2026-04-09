@@ -209,6 +209,73 @@ class OnnxTiledPlugin(AutolabelPlugin):
         label_map = np.argmax(prob_stack, axis=-1).astype(np.uint8)
         return label_map
 
+    def run_with_config(
+        self,
+        image: np.ndarray,
+        strategy: str,
+        layer_priorities: dict,
+    ) -> np.ndarray:
+        """Run inference and apply the requested conflict resolution strategy.
+
+        Parameters
+        ----------
+        strategy:
+            ``"argmax"`` \u2014 standard argmax over per-layer probabilities (same
+            as ``run()``).
+            ``"layer_priority"`` \u2014 for each pixel assign the highest-priority
+            layer (lowest priority number) whose probability \u2265 0.5.  Pixels
+            where no layer reaches the threshold fall back to argmax.
+        layer_priorities:
+            ``{layer_name: priority_int}`` dict where 1 is the highest
+            priority.  Used only when *strategy* is ``"layer_priority"``.
+        """
+        prob_maps = []
+        for session, layer_name in zip(self._sessions, self._layer_names):
+            prob = self._run_model(session, image, layer_name)
+            prob_maps.append(prob)
+
+        prob_stack = np.stack(prob_maps, axis=-1)  # H \u00d7 W \u00d7 N_layers
+
+        if strategy == "layer_priority" and layer_priorities:
+            return self._apply_layer_priority(prob_stack, layer_priorities)
+        return np.argmax(prob_stack, axis=-1).astype(np.uint8)
+
+    # Conflict resolution ----------------------------------------------
+
+    _PRIORITY_THRESHOLD = 0.5  # minimum probability for a layer to "claim" a pixel
+
+    def _apply_layer_priority(
+        self,
+        prob_stack: np.ndarray,
+        layer_priorities: dict,
+    ) -> np.ndarray:
+        """Assign pixels using layer priority instead of argmax.
+
+        Processing order: from the lowest-priority layer to the highest so
+        that the highest-priority layer wins by overwriting lower-priority
+        assignments.  Pixels where no layer reaches ``_PRIORITY_THRESHOLD``
+        are assigned by argmax (fallback).
+        """
+        # Fallback: argmax over all layers
+        label_map = np.argmax(prob_stack, axis=-1).astype(np.uint8)
+
+        # Sort layers from lowest priority (highest number) to highest (1),
+        # so that we overwrite in ascending priority \u2192 highest priority wins.
+        priority_order = sorted(
+            (
+                (layer_priorities.get(name, idx + 1), idx)
+                for idx, name in enumerate(self._layer_names)
+            ),
+            key=lambda x: x[0],
+            reverse=True,          # lowest priority first
+        )
+
+        for _priority, layer_idx in priority_order:
+            mask = prob_stack[..., layer_idx] >= self._PRIORITY_THRESHOLD
+            label_map[mask] = layer_idx
+
+        return label_map
+
     # Internal helpers -------------------------------------------------
 
     def _run_model(self, session, image: np.ndarray, layer_name: str) -> np.ndarray:

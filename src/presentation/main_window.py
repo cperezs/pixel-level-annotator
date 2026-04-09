@@ -25,6 +25,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -37,8 +38,9 @@ from PyQt6.QtWidgets import (
 from domain.layer_config import LayerConfig, read_layers_file
 from infrastructure.image_repository import ImageRepository
 from application.annotator_controller import AnnotatorController
+from application.app_state import PluginConfig
 from presentation.toolbar_panel import ToolbarPanel
-from presentation.right_panel import RightPanel
+from presentation.right_panel import RightPanel, LayerMappingDialog
 from presentation.gallery_panel import GalleryPanel
 from presentation.status_bar import StatusBar
 from presentation.style import (
@@ -349,6 +351,8 @@ class MainWindow(QMainWindow):
         rp.on_show_grid_changed(ctrl.toggle_show_grid)
         rp.on_layer_lock_toggled(ctrl.toggle_layer_lock)
         rp.on_autolabel_run(self._cb_run_autolabel)
+        rp.on_autolabel_configure(self._cb_configure_autolabel)
+        rp.on_autolabel_plugin_changed(self._cb_autolabel_plugin_changed)
 
     def _wire_gallery(self) -> None:
         self._gallery.on_image_selected(self._on_gallery_image_selected)
@@ -462,6 +466,42 @@ class MainWindow(QMainWindow):
         self._autolabel_worker = _AutolabelWorker(self._controller, plugin_id, self)
         self._autolabel_worker.finished.connect(self._on_autolabel_finished)
         self._autolabel_worker.start()
+
+    def _cb_configure_autolabel(self, plugin_id: str) -> None:
+        """Open the model configuration dialog for the selected plugin."""
+        plugin = self._controller.autolabel_service.get_plugin_by_id(plugin_id)
+        if plugin is None:
+            return
+        app_layer_names = [lc.name for lc in self._controller.layer_configs]
+        current_config = self._controller.state.plugin_configs.get(plugin_id)
+        current_mapping = current_config.layer_mapping if current_config else {}
+        current_strategy = current_config.conflict_strategy if current_config else "argmax"
+        current_priorities = current_config.layer_priorities if current_config else {}
+
+        dialog = LayerMappingDialog(
+            plugin.display_name,
+            plugin.supported_layers,
+            app_layer_names,
+            current_mapping,
+            current_strategy,
+            current_priorities,
+            self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            cfg = dialog.get_config()
+            self._controller.state.plugin_configs[plugin_id] = PluginConfig(
+                layer_mapping=cfg["layer_mapping"],
+                conflict_strategy=cfg["conflict_strategy"],
+                layer_priorities=cfg["layer_priorities"],
+            )
+            self._right_panel.update_mapping_indicator(has_mapping=True)
+
+    def _cb_autolabel_plugin_changed(self, plugin_id: Optional[str]) -> None:
+        """Refresh the mapping indicator when the selected plugin changes."""
+        has_mapping = bool(
+            plugin_id and plugin_id in self._controller.state.plugin_configs
+        )
+        self._right_panel.update_mapping_indicator(has_mapping)
 
     def _on_autolabel_finished(self, error) -> None:
         self._hide_busy_overlay()

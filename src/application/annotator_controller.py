@@ -446,7 +446,8 @@ class AnnotatorController:
         if not self._document or not self._metadata:
             return "No image loaded"
 
-        success, error = self._autolabel.run(plugin_id, self._document, self._metadata)
+        plugin_config = self._state.plugin_configs.get(plugin_id)
+        success, error = self._autolabel.run(plugin_id, self._document, self._metadata, plugin_config)
         if not success:
             return error
 
