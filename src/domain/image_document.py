@@ -10,6 +10,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 import logging
+from typing import Optional
 from collections import deque
 
 logger = logging.getLogger(__name__)
@@ -211,13 +212,16 @@ class ImageDocument:
         y: int,
         threshold: int,
         ignore_annotations: bool = False,
+        extra_barrier_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Return the 8-connected region of pixels spectrally similar to (x, y).
 
         A pixel is *similar* when its greyscale value differs from the seed
         by at most *threshold*.  Already-annotated regions act as hard
         boundaries (barriers to flood propagation) unless *ignore_annotations*
-        is True.
+        is True.  *extra_barrier_mask*, if provided, is an additional uint8
+        mask whose non-zero pixels are treated as barriers regardless of
+        *ignore_annotations* (e.g. pixels from locked layers).
 
         Implementation
         --------------
@@ -257,6 +261,10 @@ class ImageDocument:
                 similar = np.where(blocked > 0, np.uint8(0), similar)
 
             reachable = similar
+
+        # Apply any extra barriers (e.g. locked layer pixels) on top.
+        if extra_barrier_mask is not None and np.any(extra_barrier_mask):
+            reachable = np.where(extra_barrier_mask > 0, np.uint8(0), reachable)
 
         # If the seed pixel is itself blocked or dissimilar, return an empty mask.
         if reachable[y, x] == 0:

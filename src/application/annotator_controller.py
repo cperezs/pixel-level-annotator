@@ -599,6 +599,18 @@ class AnnotatorController:
                 self.set_pen_size(tool.pen_size + 1)
             elif tool.active == "erase":
                 self.set_eraser_size(tool.eraser_size + 1)
+            elif tool.active == "selector" and tool.is_drawing:
+                mask = self._state.session.selection_mask
+                if mask is not None and self._document is not None:
+                    layer = self._state.session.active_layer
+                    locked = self._state.session.locked_layers
+                    locked_mask = self._document.get_locked_other_annotations_mask(layer, locked)
+                    cur_layer_mask = self._document.annotations[layer]
+                    barrier = np.bitwise_or(locked_mask, cur_layer_mask)
+                    self._state.session.selection_mask = expand_mask(
+                        mask, barrier if np.any(barrier) else None
+                    )
+                    self._sync_selection_mask()
             elif tool.active == "selector":
                 self.set_selector_threshold(tool.selector_threshold + 1)
 
@@ -607,6 +619,11 @@ class AnnotatorController:
                 self.set_pen_size(tool.pen_size - 1)
             elif tool.active == "erase":
                 self.set_eraser_size(tool.eraser_size - 1)
+            elif tool.active == "selector" and tool.is_drawing:
+                mask = self._state.session.selection_mask
+                if mask is not None:
+                    self._state.session.selection_mask = shrink_mask(mask)
+                    self._sync_selection_mask()
             elif tool.active == "selector":
                 self.set_selector_threshold(tool.selector_threshold - 1)
 
@@ -679,8 +696,12 @@ class AnnotatorController:
     def _run_selector(self, px: int, py: int) -> None:
         doc = self._document
         tool = self._state.tool
+        layer = self._state.session.active_layer
+        locked = self._state.session.locked_layers
+        locked_mask = doc.get_locked_other_annotations_mask(layer, locked)
         mask = doc.compute_similarity_mask(
-            px, py, tool.selector_threshold, ignore_annotations=True
+            px, py, tool.selector_threshold, ignore_annotations=True,
+            extra_barrier_mask=locked_mask if np.any(locked_mask) else None,
         )
         if tool.selector_auto_smooth:
             mask = smooth_mask(mask)
