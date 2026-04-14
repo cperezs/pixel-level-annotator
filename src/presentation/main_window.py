@@ -26,23 +26,28 @@ from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from domain.layer_config import LayerConfig, read_layers_file
+from domain.project import ProjectConfig
 from infrastructure.image_repository import ImageRepository
+from infrastructure.project_manager import ProjectManager
 from application.annotator_controller import AnnotatorController
 from application.app_state import PluginConfig
 from presentation.toolbar_panel import ToolbarPanel
 from presentation.right_panel import RightPanel, LayerMappingDialog
 from presentation.gallery_panel import GalleryPanel
 from presentation.status_bar import StatusBar
+from presentation.welcome_screen import WelcomeScreen
 from presentation.style import (
     GLOBAL_STYLESHEET,
     PRIMARY,
@@ -88,64 +93,261 @@ class MainWindow(QMainWindow):
         # Apply global stylesheet
         self.setStyleSheet(GLOBAL_STYLESHEET)
 
-        layer_configs: list[LayerConfig] = read_layers_file()
+        self._viewer_class = viewer_class
+        self._project_folder: Optional[str] = None
+        self._project_config: Optional[ProjectConfig] = None
+        self._controller: Optional[AnnotatorController] = None
         self._current_web_request = None
+        self._save_timer: Optional[QTimer] = None
 
-        # Infrastructure
-        self._image_repo = ImageRepository()
+        # Stacked widget: 0 = welcome screen, 1 = annotator
+        self._stack = QStackedWidget()
+        self.setCentralWidget(self._stack)
 
-        # Viewer
-        if viewer_class is None:
-            from viewer.gl_viewer import GLImageAnnotationViewer
-            viewer_class = GLImageAnnotationViewer
-        self._viewer = viewer_class()
+        # Welcome screen
+        self._welcome = WelcomeScreen()
+        self._welcome.on_open_folder(self._ask_open_project)
+        self._stack.addWidget(self._welcome)
 
-        # Application controller
-        self._controller = AnnotatorController(self._viewer, layer_configs, self._image_repo)
-        self._controller.on_progress_changed(self._on_progress_changed)
-        self._controller.on_web_service_image_ready(self._on_web_service_image_ready)
-        self._controller.on_status_changed(self._on_status_changed)
-
-        # Panels
-        self._toolbar = ToolbarPanel(layer_configs)
-        self._right_panel = RightPanel(layer_configs)
-        self._gallery = GalleryPanel()
-        self._gallery.setVisible(False)
-        self._status_bar = StatusBar()
-
-        # Progress tracking
-        self._progress_value = 0
-
-        # Layout
-        self._build_layout()
-
-        # Wire all callbacks
-        self._wire_toolbar()
-        self._wire_right_panel()
-        self._wire_gallery()
-
-        # Web service
-        self._web_service = WebService(self)
-
-        # Initial data
-        self._populate_gallery()
-        plugins = self._controller.autolabel_service.get_compatible_plugins()
-        self._right_panel.refresh_autolabel_plugins(plugins)
-
-        # Load first image
-        filenames = self._image_repo.list_images()
-        if filenames:
-            self._controller.load_image(filenames[0])
-            self._gallery.set_current_filename(filenames[0])
-            self._update_status()
-
-        # self.showMaximized()
-        QTimer.singleShot(0, self._viewer.setFocus)
+        # Placeholder for annotator widget (built on project open)
+        self._annotator_widget: Optional[QWidget] = None
 
         # Return keyboard focus to the viewer after any sidebar interaction.
         app = QApplication.instance()
         if app is not None:
             app.focusChanged.connect(self._on_focus_changed)
+
+    # ------------------------------------------------------------------
+    # Project lifecycle
+    # ------------------------------------------------------------------
+
+    def open_project(self, folder: str) -> None:
+        """Open *folder* as the current project."""
+        import os
+
+        # Save previous project before switching
+        self._save_project_config()
+        if self._controller:
+            self._controller.close()
+
+        self._project_folder = folder
+        self._project_config = ProjectManager.load_project(folder)
+        ProjectManager.set_last_project_path(folder)
+
+        # Change working directory to the project folder so relative paths
+        # (images/, annotations/) resolve correctly.
+        os.chdir(folder)
+
+        # Ensure layers.txt exists in the project folder
+        self._ensure_layers_file(folder)
+
+        layer_configs: list[LayerConfig] = read_layers_file(
+            os.path.join(folder, "layers.txt")
+        )
+
+        # Infrastructure — images can live in {folder}/images/ or directly in {folder}
+        candidate_images_dir = os.path.join(folder, "images")
+        images_dir = candidate_images_dir if os.path.isdir(candidate_images_dir) else folder
+        annotations_dir = os.path.join(folder, "annotations")
+        image_repo = ImageRepository(images_dir, annotations_dir)
+
+        # Viewer
+        viewer_class = self._viewer_class
+        if viewer_class is None:
+            from viewer.gl_viewer import GLImageAnnotationViewer
+            viewer_class = GLImageAnnotationViewer
+        viewer = viewer_class()
+
+        # Application controller
+        controller = AnnotatorController(viewer, layer_configs, image_repo)
+        controller.on_progress_changed(self._on_progress_changed)
+        controller.on_web_service_image_ready(self._on_web_service_image_ready)
+        controller.on_status_changed(self._on_status_changed)
+        self._controller = controller
+        self._image_repo = image_repo
+        self._layer_configs = layer_configs
+
+        # Apply saved project state to controller
+        self._apply_project_config(controller)
+
+        # Build (or rebuild) the annotator UI
+        self._build_annotator_ui(layer_configs, viewer)
+
+        # Wire callbacks
+        self._wire_toolbar()
+        self._wire_right_panel()
+        self._wire_gallery()
+
+        # Set project name in the right panel (always the folder name)
+        self._right_panel.set_project_name(self._project_config.name)
+
+        # Subscribe to state changes for auto-save
+        self._setup_auto_save(controller)
+
+        # Web service
+        self._web_service = WebService(self)
+
+        # Populate gallery and load first image
+        self._populate_gallery()
+        plugins = controller.autolabel_service.get_compatible_plugins()
+        saved_plugin = self._project_config.selected_plugin_id if self._project_config else None
+        self._right_panel.refresh_autolabel_plugins(plugins, initial_plugin_id=saved_plugin)
+
+        # Load last image or first available
+        filenames = image_repo.list_images()
+        target = self._project_config.last_image
+        if target and target not in filenames:
+            target = None
+        if not target and filenames:
+            target = filenames[0]
+        if target:
+            controller.load_image(target)
+            self._gallery.set_current_filename(target)
+            self._update_status()
+            self._save_project_config()
+
+        # Show annotator
+        self._stack.setCurrentIndex(1)
+        self.setWindowTitle(f"PixelLabeler — {self._project_config.name}")
+        QTimer.singleShot(0, viewer.setFocus)
+
+    def _ensure_layers_file(self, folder: str) -> None:
+        """Write a default layers.txt in *folder* when absent or empty."""
+        import os
+        from domain.layer_config import _DEFAULT_LAYERS, write_layers_file
+        path = os.path.join(folder, "layers.txt")
+        if not os.path.exists(path) or os.stat(path).st_size == 0:
+            write_layers_file(list(_DEFAULT_LAYERS), path)
+
+    def _apply_project_config(self, controller: AnnotatorController) -> None:
+        """Restore saved project state into the controller's AppState."""
+        cfg = self._project_config
+        if cfg is None:
+            return
+        s = controller.state
+        s.tool.pen_size = cfg.pen_size
+        s.tool.eraser_size = cfg.eraser_size
+        s.tool.selector_threshold = cfg.selector_threshold
+        s.tool.selector_auto_smooth = cfg.selector_auto_smooth
+        s.tool.fill_all = cfg.fill_all
+        s.view.show_image = cfg.show_image
+        s.view.show_other_layers = cfg.show_other_layers
+        s.view.show_missing_pixels = cfg.show_missing_pixels
+        s.view.show_grid = cfg.show_grid
+        s.session.active_layer = cfg.active_layer
+        s.session.locked_layers = set(cfg.locked_layers)
+        s.session.hidden_layers = set(cfg.hidden_layers)
+        # Restore plugin configs
+        for pid, pcfg in cfg.plugin_configs.items():
+            s.plugin_configs[pid] = PluginConfig(
+                layer_mapping=pcfg.get("layer_mapping", {}),
+                conflict_strategy=pcfg.get("conflict_strategy", "argmax"),
+                layer_priorities=pcfg.get("layer_priorities", {}),
+            )
+
+    def _build_annotator_ui(self, layer_configs, viewer) -> None:
+        """Build the full annotator layout and add it to the stack."""
+        # Remove old annotator widget if present
+        if self._annotator_widget is not None:
+            self._stack.removeWidget(self._annotator_widget)
+            self._annotator_widget.deleteLater()
+
+        self._viewer = viewer
+        self._toolbar = ToolbarPanel(layer_configs)
+        self._right_panel = RightPanel(layer_configs)
+        self._gallery = GalleryPanel()
+        self._gallery.setVisible(False)
+        self._status_bar = StatusBar()
+        self._progress_value = 0
+
+        main_widget = QWidget()
+        root = QVBoxLayout(main_widget)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Top bar
+        root.addWidget(self._build_top_bar())
+
+        # Middle area
+        middle = QHBoxLayout()
+        middle.setContentsMargins(0, 0, 0, 0)
+        middle.setSpacing(0)
+
+        middle.addWidget(self._toolbar, 0)
+        middle.addWidget(self._gallery, 0)
+
+        canvas_wrapper = QWidget()
+        canvas_wrapper.setStyleSheet(f"background-color: {SURFACE_CONTAINER_LOW};")
+        canvas_layout = QVBoxLayout(canvas_wrapper)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.addWidget(viewer, 1)
+        middle.addWidget(canvas_wrapper, 1)
+        self._canvas_wrapper = canvas_wrapper
+
+        middle.addWidget(self._right_panel, 0)
+        root.addLayout(middle, 1)
+
+        # Status bar
+        root.addWidget(self._status_bar)
+
+        self._annotator_widget = main_widget
+        self._stack.addWidget(main_widget)
+
+    def _setup_auto_save(self, controller: AnnotatorController) -> None:
+        """Subscribe to state changes and debounce project config saves."""
+        # Use a single-shot timer to debounce rapid-fire changes.
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(500)  # ms
+        self._save_timer.timeout.connect(self._save_project_config)
+
+        def _schedule_save():
+            if self._save_timer is not None:
+                self._save_timer.start()
+
+        controller.state.subscribe("tool", _schedule_save)
+        controller.state.subscribe("session", _schedule_save)
+        controller.state.subscribe("view", _schedule_save)
+
+    def _save_project_config(self) -> None:
+        """Snapshot current state into ProjectConfig and save to disk."""
+        if self._project_folder is None or self._project_config is None:
+            return
+        if self._controller is None:
+            return
+        cfg = self._project_config
+        s = self._controller.state
+        cfg.pen_size = s.tool.pen_size
+        cfg.eraser_size = s.tool.eraser_size
+        cfg.selector_threshold = s.tool.selector_threshold
+        cfg.selector_auto_smooth = s.tool.selector_auto_smooth
+        cfg.fill_all = s.tool.fill_all
+        cfg.show_image = s.view.show_image
+        cfg.show_other_layers = s.view.show_other_layers
+        cfg.show_missing_pixels = s.view.show_missing_pixels
+        cfg.show_grid = s.view.show_grid
+        cfg.active_layer = s.session.active_layer
+        cfg.locked_layers = list(s.session.locked_layers)
+        cfg.hidden_layers = list(s.session.hidden_layers)
+        cfg.last_image = self._controller.current_filename
+        cfg.selected_plugin_id = self._right_panel.get_selected_plugin_id()
+        # Serialize plugin configs
+        cfg.plugin_configs = {}
+        for pid, pc in s.plugin_configs.items():
+            entry: dict = {
+                "layer_mapping": pc.layer_mapping,
+                "conflict_strategy": pc.conflict_strategy,
+            }
+            if pc.conflict_strategy != "argmax":
+                entry["layer_priorities"] = pc.layer_priorities
+            cfg.plugin_configs[pid] = entry
+        ProjectManager.save_project(self._project_folder, cfg)
+
+    def _ask_open_project(self) -> None:
+        """Show a folder picker and open the selected folder as a project."""
+        folder = QFileDialog.getExistingDirectory(self, "Open Project Folder")
+        if folder:
+            self.open_project(folder)
 
     # ------------------------------------------------------------------
     # Web service integration
@@ -160,46 +362,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event) -> None:
-        self._controller.close()
+        self._save_project_config()
+        if self._controller:
+            self._controller.close()
         event.accept()
 
     # ------------------------------------------------------------------
     # Layout construction
     # ------------------------------------------------------------------
-
-    def _build_layout(self) -> None:
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        root = QVBoxLayout(main_widget)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-
-        # Top bar
-        root.addWidget(self._build_top_bar())
-
-        # Middle area: toolbar | gallery? | canvas | right panel
-        middle = QHBoxLayout()
-        middle.setContentsMargins(0, 0, 0, 0)
-        middle.setSpacing(0)
-
-        middle.addWidget(self._toolbar, 0)
-        middle.addWidget(self._gallery, 0)
-
-        # Canvas wrapper
-        canvas_wrapper = QWidget()
-        canvas_wrapper.setStyleSheet(f"background-color: {SURFACE_CONTAINER_LOW};")
-        canvas_layout = QVBoxLayout(canvas_wrapper)
-        canvas_layout.setContentsMargins(0, 0, 0, 0)
-        canvas_layout.addWidget(self._viewer, 1)
-        middle.addWidget(canvas_wrapper, 1)
-        self._canvas_wrapper = canvas_wrapper
-
-        middle.addWidget(self._right_panel, 0)
-
-        root.addLayout(middle, 1)
-
-        # Status bar
-        root.addWidget(self._status_bar)
 
     def _build_top_bar(self) -> QWidget:
         """Build the top navigation bar."""
@@ -353,6 +523,7 @@ class MainWindow(QMainWindow):
         rp.on_autolabel_run(self._cb_run_autolabel)
         rp.on_autolabel_configure(self._cb_configure_autolabel)
         rp.on_autolabel_plugin_changed(self._cb_autolabel_plugin_changed)
+        rp.on_open_project(self._ask_open_project)
 
     def _wire_gallery(self) -> None:
         self._gallery.on_image_selected(self._on_gallery_image_selected)
@@ -401,6 +572,9 @@ class MainWindow(QMainWindow):
         else:
             self._status_bar.set_coordinates(None, None)
         self._status_bar.set_active_tool(ctrl.active_tool_name)
+        has_image = bool(ctrl.current_filename)
+        self._toolbar.set_image_loaded(has_image)
+        self._right_panel.set_image_loaded(has_image)
 
     # ------------------------------------------------------------------
     # Gallery
@@ -433,7 +607,12 @@ class MainWindow(QMainWindow):
 
     def _populate_gallery(self) -> None:
         filenames = self._image_repo.list_images()
-        self._gallery.populate(filenames, self._image_repo._images_dir)
+        self._gallery.populate(
+            filenames,
+            self._image_repo._images_dir,
+            self._image_repo._annotations_dir,
+            self._layer_configs,
+        )
         # Always refresh the current-image highlight (cheap operation).
         if self._controller.current_filename:
             self._gallery.set_current_filename(self._controller.current_filename)
@@ -442,6 +621,7 @@ class MainWindow(QMainWindow):
         self._controller.load_image(filename)
         self._gallery.set_current_filename(filename)
         self._update_status()
+        self._save_project_config()
 
     # ------------------------------------------------------------------
     # Toolbar action handlers
@@ -495,6 +675,7 @@ class MainWindow(QMainWindow):
                 layer_priorities=cfg["layer_priorities"],
             )
             self._right_panel.update_mapping_indicator(has_mapping=True)
+            self._save_project_config()
 
     def _cb_autolabel_plugin_changed(self, plugin_id: Optional[str]) -> None:
         """Refresh the mapping indicator when the selected plugin changes."""
@@ -502,6 +683,7 @@ class MainWindow(QMainWindow):
             plugin_id and plugin_id in self._controller.state.plugin_configs
         )
         self._right_panel.update_mapping_indicator(has_mapping)
+        self._save_project_config()
 
     def _on_autolabel_finished(self, error) -> None:
         self._hide_busy_overlay()
@@ -586,7 +768,7 @@ class MainWindow(QMainWindow):
         areas and container widgets can still receive focus; this handles all
         such cases in one place.
         """
-        if new is None:
+        if new is None or not hasattr(self, '_toolbar'):
             return
         w = new
         while w is not None:
@@ -601,4 +783,5 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        QTimer.singleShot(0, lambda: self._on_progress_changed(self._progress_value))
+        if hasattr(self, '_progress_value'):
+            QTimer.singleShot(0, lambda: self._on_progress_changed(self._progress_value))

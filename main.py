@@ -113,15 +113,23 @@ if __name__ == "__main__":
     backend = config.get("viewer", {}).get("backend", "gl")
     logger.info("Viewer backend: %s", backend)
 
-    _ensure_layers_file()
     viewer_class = _resolve_viewer(backend)
 
     from presentation.main_window import MainWindow
     from presentation.style import GLOBAL_STYLESHEET
+    from infrastructure.project_manager import ProjectManager
+
+    ProjectManager.set_app_root(_ROOT)
 
     app = QApplication(sys.argv)
     app.setStyleSheet(GLOBAL_STYLESHEET)
     window = MainWindow(viewer_class=viewer_class)
     window.show()
+
+    # Auto-open last project if available
+    last_project = ProjectManager.get_last_project_path()
+    if last_project:
+        window.open_project(last_project)
+
     sys.exit(app.exec())
 

@@ -5,6 +5,7 @@ data/
 .vscode/
 .DS_Store
 *.onnx
+.pixellabeler_app.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

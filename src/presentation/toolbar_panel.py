@@ -153,6 +153,7 @@ class ToolbarPanel(QWidget):
         self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll, 1)
+        self._scroll_area = scroll
 
         self._bottom_widget = QWidget()
         self._bottom_widget.setStyleSheet(f"background-color: {SURFACE_CONTAINER_HIGH};")
@@ -175,13 +176,20 @@ class ToolbarPanel(QWidget):
         # Select the default tool visually
         self.set_active_tool("selector")
 
+        # Nothing to annotate until an image is loaded
+        self.set_image_loaded(False)
+
     # ------------------------------------------------------------------
     # Callback registration
     # ------------------------------------------------------------------
 
+    def set_image_loaded(self, loaded: bool) -> None:
+        """Enable or disable all tool controls (no effect on the panel frame itself)."""
+        self._scroll_area.setEnabled(loaded)
+        self._bottom_widget.setEnabled(loaded)
+
     def on_tool_selected(self, cb: Callable[[str], None]) -> None:
         self._cb_tool_selected = cb
-
     def on_pen_size_changed(self, cb: Callable[[int], None]) -> None:
         self._q_pen_spin.valueChanged.connect(cb)
         self._q_pen_slider.valueChanged.connect(

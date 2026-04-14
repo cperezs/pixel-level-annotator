@@ -558,10 +558,15 @@ class RightPanel(QWidget):
         self._cb_layer_selected: Optional[Callable[[int], None]] = None
         self._cb_autolabel_plugin_changed: Optional[Callable[[Optional[str]], None]] = None
         self._cb_autolabel_configure: Optional[Callable[[str], None]] = None
+        self._cb_open_project: Optional[Callable[[], None]] = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+
+        # Project header (sticky top, above scroll area)
+        self._build_project_header()
+        outer.addWidget(self._project_header_widget, 0)
 
         # Scrollable area for layers + view options
         scroll = QScrollArea()
@@ -575,6 +580,7 @@ class RightPanel(QWidget):
         self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll, 1)
+        self._scroll_area = scroll
 
         # Sticky bottom area for autolabeling
         self._bottom_widget = QWidget()
@@ -584,18 +590,28 @@ class RightPanel(QWidget):
         self._bottom_layout.setSpacing(8)
         outer.addWidget(self._bottom_widget, 0)
 
-        self._build_workspace_header()
         self._build_layers_section(layer_configs)
         self._build_view_options()
         self._build_autolabel_section()
         self._layout.addStretch()
 
+        # Nothing to interact with until an image is loaded
+        self.set_image_loaded(False)
+
     # ------------------------------------------------------------------
     # Callback registration
     # ------------------------------------------------------------------
 
+    def set_image_loaded(self, loaded: bool) -> None:
+        """Enable or disable everything below the project header."""
+        self._scroll_area.setEnabled(loaded)
+        self._bottom_widget.setEnabled(loaded)
+
     def on_layer_selected(self, cb: Callable[[int], None]) -> None:
         self._cb_layer_selected = cb
+
+    def on_open_project(self, cb: Callable[[], None]) -> None:
+        self._cb_open_project = cb
 
     def on_show_image_changed(self, cb: Callable[[bool], None]) -> None:
         self._q_show_image.clicked.connect(lambda: cb(self._show_image_active))
@@ -655,9 +671,13 @@ class RightPanel(QWidget):
         self._grid_visible_active = state.show_grid
         self._update_toggle_style(self._q_show_grid, state.show_grid)
 
-    def refresh_autolabel_plugins(self, plugins) -> None:
-        # Preserve the currently selected plugin id across refresh
-        current_id = self._q_autolabel_combo.currentData()
+    def set_project_name(self, name: str) -> None:
+        """Update the displayed project name."""
+        self._project_name_label.setText(name or "—")
+
+    def refresh_autolabel_plugins(self, plugins, initial_plugin_id: Optional[str] = None) -> None:
+        # Use the explicit initial_plugin_id if provided, else preserve the current selection.
+        current_id = initial_plugin_id if initial_plugin_id is not None else self._q_autolabel_combo.currentData()
         self._q_autolabel_combo.blockSignals(True)
         self._q_autolabel_combo.clear()
         self._q_autolabel_combo.addItem("--Select model--", None)
@@ -680,6 +700,13 @@ class RightPanel(QWidget):
     def get_selected_plugin_id(self) -> Optional[str]:
         return self._q_autolabel_combo.currentData()
 
+    def set_selected_plugin(self, plugin_id: str) -> None:
+        """Select the combo item matching *plugin_id*, if present."""
+        for i in range(self._q_autolabel_combo.count()):
+            if self._q_autolabel_combo.itemData(i) == plugin_id:
+                self._q_autolabel_combo.setCurrentIndex(i)
+                return
+
     def update_mapping_indicator(self, has_mapping: bool) -> None:
         """Update the configure button appearance when a mapping is saved/cleared."""
         if has_mapping:
@@ -701,13 +728,56 @@ class RightPanel(QWidget):
     # Widget construction
     # ------------------------------------------------------------------
 
-    def _build_workspace_header(self) -> None:
-        lbl = QLabel("Workspace")
-        lbl.setStyleSheet(
+    def _build_project_header(self) -> None:
+        """Build the sticky project section header at the top."""
+        self._project_header_widget = QWidget()
+        self._project_header_widget.setStyleSheet(
+            f"background-color: {SURFACE_CONTAINER_HIGH};"
+        )
+        outer = QVBoxLayout(self._project_header_widget)
+        outer.setContentsMargins(14, 8, 8, 8)
+        outer.setSpacing(4)
+
+        # Top row: "Project" section label + open-project button
+        top_row = QWidget()
+        top_row.setStyleSheet("background: transparent; border: none;")
+        top_layout = QHBoxLayout(top_row)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(6)
+
+        section_lbl = QLabel("Project")
+        section_lbl.setStyleSheet(
             f"color: {PRIMARY}; font-size: {FONT_SIZE_SM}px; "
             f"font-weight: 700; letter-spacing: 1px;"
         )
-        self._layout.addWidget(lbl)
+        top_layout.addWidget(section_lbl)
+        top_layout.addStretch()
+
+        open_btn = QPushButton("📂")
+        open_btn.setFixedSize(28, 28)
+        open_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        open_btn.setToolTip("Open another project folder")
+        open_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; "
+            f"border-radius: 6px; font-size: 14px; padding: 0; }}"
+            f"QPushButton:hover {{ background: rgba(255,255,255,0.07); }}"
+        )
+        open_btn.clicked.connect(self._on_open_project_clicked)
+        top_layout.addWidget(open_btn)
+        outer.addWidget(top_row)
+
+        # Project name label (read-only — always the folder name)
+        self._project_name_label = QLabel("—")
+        self._project_name_label.setStyleSheet(
+            f"color: {ON_SURFACE}; font-size: {FONT_SIZE_SM}px; "
+            f"border: none; padding-bottom: 2px;"
+        )
+        outer.addWidget(self._project_name_label)
+
+    def _on_open_project_clicked(self) -> None:
+        if self._cb_open_project:
+            self._cb_open_project()
 
     def _build_layers_section(self, layer_configs: list[LayerConfig]) -> None:
         # Layers header (simple text + count)
@@ -739,10 +809,23 @@ class RightPanel(QWidget):
             self._layer_rows[0].set_selected(True)
 
     def _build_view_options(self) -> None:
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {OUTLINE_VARIANT}; max-height: 1px; margin-top: 4px;")
+        self._layout.addWidget(sep)
+
+        workspace_lbl = QLabel("Workspace")
+        workspace_lbl.setStyleSheet(
+            f"color: {PRIMARY}; font-size: {FONT_SIZE_SM}px; "
+            f"border-top: 1px solid {OUTLINE_VARIANT}; padding-top: 12px; "
+            f"font-weight: 700; letter-spacing: 1px;"
+        )
+        self._layout.addWidget(workspace_lbl)
+
         lbl = QLabel("VIEW OPTIONS")
         lbl.setStyleSheet(
             f"color: {ON_SURFACE_VARIANT}; font-size: {FONT_SIZE_XS}px; "
-            f"font-weight: 700; letter-spacing: 1.5px; margin-top: 8px;"
+            f"font-weight: 700; letter-spacing: 1.5px; margin-top: 4px;"
         )
         self._layout.addWidget(lbl)
 

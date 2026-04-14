@@ -10,6 +10,8 @@ import os
 import logging
 from typing import Callable, Optional
 
+import cv2
+import numpy as np
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtWidgets import (
@@ -40,16 +42,71 @@ from presentation.style import (
 logger = logging.getLogger(__name__)
 
 _THUMB_SIZE = 100  # px
+_ANNOTATION_ALPHA = 0.45  # opacity for annotation colour overlay
 
-# Module-level pixmap cache: maps (absolute_path, mtime_ns) -> QPixmap
+# Module-level pixmap cache: maps cache-key tuple -> QPixmap
 # Survives gallery close/open cycles without re-reading from disk.
 _thumb_cache: dict[tuple, "QPixmap"] = {}
+
+
+def _load_thumbnail(path: str, annotations_dir: str = "", layers=None) -> Optional["QPixmap"]:
+    """Load, scale and annotate a thumbnail, using a module-level cache."""
+    try:
+        mtime = os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+
+    stem = os.path.splitext(os.path.basename(path))[0]
+    ann_mtimes: list[int] = []
+    if layers and annotations_dir:
+        for i in range(len(layers)):
+            ann_path = os.path.join(annotations_dir, f"{stem}_{i}.png")
+            try:
+                ann_mtimes.append(os.stat(ann_path).st_mtime_ns)
+            except OSError:
+                ann_mtimes.append(0)
+
+    key = (path, mtime, *ann_mtimes)
+    if key in _thumb_cache:
+        return _thumb_cache[key]
+
+    bgr = cv2.imread(path)
+    if bgr is None:
+        return None
+
+    h, w = bgr.shape[:2]
+    scale = _THUMB_SIZE / max(h, w)
+    tw = max(1, int(round(w * scale)))
+    th = max(1, int(round(h * scale)))
+    base = cv2.resize(bgr, (tw, th), interpolation=cv2.INTER_AREA)
+    rgb = cv2.cvtColor(base, cv2.COLOR_BGR2RGB).astype(np.float32)
+
+    if layers and annotations_dir:
+        for i, layer in enumerate(layers):
+            ann_path = os.path.join(annotations_dir, f"{stem}_{i}.png")
+            mask = cv2.imread(ann_path, cv2.IMREAD_GRAYSCALE)
+            if mask is None:
+                continue
+            mask_small = cv2.resize(mask, (tw, th), interpolation=cv2.INTER_NEAREST)
+            nonzero = mask_small > 0
+            if not nonzero.any():
+                continue
+            r, g, b = layer.color_rgb
+            for c, val in enumerate((r, g, b)):
+                channel = rgb[:, :, c]
+                channel[nonzero] = channel[nonzero] * (1 - _ANNOTATION_ALPHA) + val * _ANNOTATION_ALPHA
+
+    out = np.clip(rgb, 0, 255).astype(np.uint8)
+    qimg = QImage(out.tobytes(), tw, th, 3 * tw, QImage.Format.Format_RGB888)
+    pixmap = QPixmap.fromImage(qimg)
+    _thumb_cache[key] = pixmap
+    return pixmap
 
 
 class _ThumbnailItem(QFrame):
     """A single thumbnail card with image preview and filename."""
 
-    def __init__(self, filename: str, images_dir: str, parent=None):
+    def __init__(self, filename: str, images_dir: str, annotations_dir: str = "", layers=None, parent=None):
         super().__init__(parent)
         self._filename = filename
         self._selected = False
@@ -70,7 +127,7 @@ class _ThumbnailItem(QFrame):
         thumb_label.setStyleSheet("background: transparent; border: none;")
 
         image_path = os.path.join(images_dir, filename)
-        pixmap = self._load_thumbnail(image_path)
+        pixmap = _load_thumbnail(image_path, annotations_dir, layers)
         if pixmap:
             thumb_label.setPixmap(pixmap)
         else:
@@ -123,29 +180,7 @@ class _ThumbnailItem(QFrame):
                 }}
             """)
 
-    @staticmethod
-    def _load_thumbnail(path: str) -> Optional[QPixmap]:
-        """Load and scale an image to thumbnail size, using a module-level cache."""
-        try:
-            mtime = os.stat(path).st_mtime_ns
-        except OSError:
-            return None
-        key = (path, mtime)
-        if key in _thumb_cache:
-            return _thumb_cache[key]
-        try:
-            pixmap = QPixmap(path)
-            if pixmap.isNull():
-                return None
-            scaled = pixmap.scaled(
-                _THUMB_SIZE, _THUMB_SIZE,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            _thumb_cache[key] = scaled
-            return scaled
-        except Exception:
-            return None
+
 
 
 # ------------------------------------------------------------------
@@ -161,6 +196,8 @@ class GalleryPanel(QWidget):
         self.setStyleSheet(f"background-color: {SURFACE_CONTAINER_HIGH};")
 
         self._images_dir = ""
+        self._annotations_dir = ""
+        self._layers = None
         self._items: list[_ThumbnailItem] = []
         self._cb_image_selected: Optional[Callable[[str], None]] = None
         self._current_filename: Optional[str] = None
@@ -220,13 +257,20 @@ class GalleryPanel(QWidget):
     def on_image_selected(self, cb: Callable[[str], None]) -> None:
         self._cb_image_selected = cb
 
-    def populate(self, filenames: list[str], images_dir: str) -> None:
+    def populate(self, filenames: list[str], images_dir: str, annotations_dir: str = "", layers=None) -> None:
         """Fill the gallery with thumbnail items."""
         # Skip expensive rebuild when nothing has changed
-        if filenames == self._populated_filenames and images_dir == self._images_dir:
+        if (
+            filenames == self._populated_filenames
+            and images_dir == self._images_dir
+            and annotations_dir == self._annotations_dir
+            and layers == self._layers
+        ):
             return
 
         self._images_dir = images_dir
+        self._annotations_dir = annotations_dir
+        self._layers = layers
         self._populated_filenames = list(filenames)
 
         # Clear existing items
@@ -237,7 +281,7 @@ class GalleryPanel(QWidget):
 
         cols = 2
         for idx, filename in enumerate(filenames):
-            item = _ThumbnailItem(filename, images_dir)
+            item = _ThumbnailItem(filename, images_dir, annotations_dir, layers)
             item.on_clicked(self._on_item_clicked)
             if filename == self._current_filename:
                 item.set_selected(True)
