@@ -151,6 +151,10 @@ class MainWindow(QMainWindow):
         annotations_dir = os.path.join(folder, "annotations")
         image_repo = ImageRepository(images_dir, annotations_dir)
 
+        # Ensure project subdirectories exist
+        os.makedirs(os.path.join(annotations_dir, "logs"), exist_ok=True)
+        os.makedirs(os.path.join(annotations_dir, "metadata"), exist_ok=True)
+
         # Viewer
         viewer_class = self._viewer_class
         if viewer_class is None:

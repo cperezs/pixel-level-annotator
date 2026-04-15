@@ -35,6 +35,25 @@ class ImageRepository:
     ) -> None:
         self._images_dir = images_dir
         self._annotations_dir = annotations_dir
+        self._migrate_metadata_files()
+
+    # ------------------------------------------------------------------
+    # Migration
+    # ------------------------------------------------------------------
+
+    def _migrate_metadata_files(self) -> None:
+        """Move legacy .metadata files from annotations/ to annotations/metadata/."""
+        if not os.path.isdir(self._annotations_dir):
+            return
+        metadata_dir = os.path.join(self._annotations_dir, "metadata")
+        for fname in os.listdir(self._annotations_dir):
+            if fname.endswith(".metadata"):
+                old_path = os.path.join(self._annotations_dir, fname)
+                os.makedirs(metadata_dir, exist_ok=True)
+                new_path = os.path.join(metadata_dir, fname)
+                if not os.path.exists(new_path):
+                    os.rename(old_path, new_path)
+                    logger.info("Migrated metadata: %s -> %s", old_path, new_path)
 
     # ------------------------------------------------------------------
     # Listing
@@ -103,9 +122,18 @@ class ImageRepository:
     # ------------------------------------------------------------------
 
     def metadata_path(self, filename: str) -> str:
-        """Return the ``<stem>.metadata`` path for *filename*."""
+        """Return the ``metadata/<stem>.metadata`` path for *filename*."""
         stem = os.path.splitext(os.path.basename(filename))[0]
-        return os.path.join(self._annotations_dir, f"{stem}.metadata")
+        metadata_dir = os.path.join(self._annotations_dir, "metadata")
+        os.makedirs(metadata_dir, exist_ok=True)
+        return os.path.join(metadata_dir, f"{stem}.metadata")
+
+    def log_path(self, filename: str) -> str:
+        """Return the ``logs/<stem>.json`` path for *filename*."""
+        stem = os.path.splitext(os.path.basename(filename))[0]
+        logs_dir = os.path.join(self._annotations_dir, "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        return os.path.join(logs_dir, f"{stem}.json")
 
     # ------------------------------------------------------------------
     # Internal helpers

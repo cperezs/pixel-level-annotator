@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 import uuid
 import logging
 from typing import Callable, Optional
@@ -38,6 +39,7 @@ from application.autolabel_service import AutolabelService
 from viewer.interface import IImageAnnotationViewer
 from infrastructure.metadata import ImageMetadata
 from infrastructure.time_tracker import TimeTracker
+from infrastructure.action_logger import ActionLogger
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,7 @@ class AnnotatorController:
         self._current_filename: Optional[str] = None
         self._metadata: Optional[ImageMetadata] = None
         self._time_tracker: Optional[TimeTracker] = None
+        self._action_logger: Optional[ActionLogger] = None
         self._autolabel = AutolabelService(layer_names)
         self._last_mouse_pos: Optional[tuple[int, int]] = None
 
@@ -168,8 +171,16 @@ class AnnotatorController:
         Returns True on success.  The viewer is updated immediately.
         """
         self._finalize_autolabel_session()
+        # Flush pending time so that the close event records accurate totals.
+        if self._time_tracker:
+            self._time_tracker.tick()
         if self._metadata:
             self._metadata.save()
+        # Log close of previous image
+        if self._action_logger and self._metadata and self._current_filename:
+            self._action_logger.log_image_close(
+                self._current_filename, self._metadata.time_by_layer,
+            )
 
         nlayers = len(self._layer_configs)
         try:
@@ -189,6 +200,18 @@ class AnnotatorController:
             doc.annotations, image_size=(doc.height, doc.width)
         )
         self._time_tracker = TimeTracker(self._metadata)
+
+        # Action logger — one log file per image
+        log_path = self._image_repo.log_path(filename)
+        self._action_logger = ActionLogger(log_path, layer_names)
+        self._action_logger.log_image_open(
+            filename=filename,
+            width=doc.width,
+            height=doc.height,
+            num_layers=nlayers,
+            pixels_per_layer=dict(self._metadata.pixels_per_layer),
+        )
+
         # Start timing layer 0 immediately so that the elapsed time up to the
         # first edit is captured.  change() starts the clock but only flushes
         # on the *next* call, so calling it here mirrors the old behaviour where
@@ -234,6 +257,8 @@ class AnnotatorController:
         )
         self._state.notify("tool")
         self._notify_status()
+        if self._action_logger:
+            self._action_logger.log_tool_select(tool)
 
     def set_active_layer(self, layer_index: int) -> None:
         self._state.session.active_layer = layer_index
@@ -245,6 +270,10 @@ class AnnotatorController:
             self._layer_configs[layer_index].color_rgb,
         )
         self._state.notify("session")
+        if self._action_logger:
+            self._action_logger.log_layer_select(
+                layer_index, self._layer_configs[layer_index].name,
+            )
 
     def set_pen_size(self, size: int) -> None:
         self._state.tool.pen_size = max(1, size)
@@ -418,16 +447,27 @@ class AnnotatorController:
     # ------------------------------------------------------------------
 
     def undo(self) -> None:
-        if self._document and self._document.undo():
-            self._image_repo.save_annotations(self._document, self._current_filename)
-            self._sync_annotation_overlay()
-            self._notify_progress()
+        if self._document:
+            if self._action_logger:
+                self._action_logger.snapshot_before(self._document.annotations)
+            if self._document.undo():
+                if self._action_logger:
+                    delta = self._action_logger.compute_delta(self._document.annotations)
+                    self._action_logger.log_undo(delta)
+                self._image_repo.save_annotations(self._document, self._current_filename)
+                self._sync_annotation_overlay()
+                self._notify_progress()
 
     def erase_all(self) -> None:
         """Clear every annotation on the current image (undoable)."""
         if not self._document:
             return
+        if self._action_logger:
+            self._action_logger.snapshot_before(self._document.annotations)
         self._document.clear_all_annotations()
+        if self._action_logger:
+            delta = self._action_logger.compute_delta(self._document.annotations)
+            self._action_logger.log_erase_all(delta)
         self._image_repo.save_annotations(self._document, self._current_filename)
         self._sync_annotation_overlay()
         self._notify_progress()
@@ -446,8 +486,23 @@ class AnnotatorController:
         if not self._document or not self._metadata:
             return "No image loaded"
 
+        if self._action_logger:
+            self._action_logger.log_autolabel_start(plugin_id)
+
+        t0 = time.time()
         plugin_config = self._state.plugin_configs.get(plugin_id)
         success, error = self._autolabel.run(plugin_id, self._document, self._metadata, plugin_config)
+        duration = time.time() - t0
+
+        if self._action_logger:
+            self._action_logger.log_autolabel_end(
+                plugin_id=plugin_id,
+                duration_seconds=duration,
+                success=success,
+                error=error,
+                pixels_per_layer=dict(self._metadata.pixels_per_layer) if success else None,
+            )
+
         if not success:
             return error
 
@@ -487,6 +542,13 @@ class AnnotatorController:
     def close(self) -> None:
         """Clean up before the application terminates."""
         self._finalize_autolabel_session()
+        # Flush pending time so that the close event records accurate totals.
+        if self._time_tracker:
+            self._time_tracker.tick()
+        if self._action_logger and self._metadata and self._current_filename:
+            self._action_logger.log_image_close(
+                self._current_filename, self._metadata.time_by_layer,
+            )
         self.save_current()
 
     # ------------------------------------------------------------------
@@ -714,10 +776,12 @@ class AnnotatorController:
         layer = self._state.session.active_layer
         connected = not self._state.tool.fill_all
         mask = doc.get_unannotated_mask(px, py, connected=connected)
+        if self._action_logger:
+            self._action_logger.snapshot_before(doc.annotations)
         self._autolabel.begin_correction(doc.annotations)
         doc.annotate_mask(mask, layer)
         self._autolabel.end_correction(doc.annotations)
-        self._post_annotation_commit(layer)
+        self._post_annotation_commit(layer, tool="fill")
 
     def _erase_draw(self, px: int, py: int) -> None:
         """Accumulate eraser brush strokes into the session selection mask."""
@@ -749,10 +813,12 @@ class AnnotatorController:
         doc = self._document
         locked = self._state.session.locked_layers
         layer = self._state.session.active_layer
+        if self._action_logger:
+            self._action_logger.snapshot_before(doc.annotations)
         doc.erase_mask_unlocked(mask, locked)
         self._state.session.selection_mask = None
         self._sync_selection_mask()
-        self._post_annotation_commit(layer)
+        self._post_annotation_commit(layer, tool="erase")
 
     def _commit_annotation(self) -> None:
         mask = self._state.session.selection_mask
@@ -761,16 +827,26 @@ class AnnotatorController:
         doc = self._document
         layer = self._state.session.active_layer
         locked = self._state.session.locked_layers
+        if self._action_logger:
+            self._action_logger.snapshot_before(doc.annotations)
         self._autolabel.begin_correction(doc.annotations)
         doc.annotate_mask_respecting_locks(mask, layer, locked)
         self._autolabel.end_correction(doc.annotations)
         self._state.session.selection_mask = None
         self._sync_selection_mask()
-        self._post_annotation_commit(layer)
+        self._post_annotation_commit(layer, tool=self._state.tool.active)
 
-    def _post_annotation_commit(self, layer: int) -> None:
+    def _post_annotation_commit(self, layer: int, tool: str = "") -> None:
         """Persist, update metadata, sync viewer, and notify progress."""
         doc = self._document
+        if self._action_logger and tool:
+            delta = self._action_logger.compute_delta(doc.annotations)
+            self._action_logger.log_annotation_commit(
+                tool=tool,
+                layer_index=layer,
+                layer_name=self._layer_configs[layer].name,
+                delta=delta,
+            )
         self._image_repo.save_annotations(doc, self._current_filename)
         if self._metadata:
             self._metadata.update_pixel_stats(
