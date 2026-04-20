@@ -645,6 +645,36 @@ class MainWindow(QMainWindow):
         if not plugin_id:
             return
 
+        # Warn if any model layers are not assigned to a workspace layer.
+        plugin_config = self._controller.state.plugin_configs.get(plugin_id)
+        if plugin_config is not None:
+            unassigned = [
+                layer
+                for layer, target in plugin_config.layer_mapping.items()
+                if target is None
+            ]
+        else:
+            plugin = self._controller.autolabel_service.get_plugin_by_id(plugin_id)
+            app_layer_names_lower = {
+                lc.name.lower() for lc in self._controller.layer_configs
+            }
+            unassigned = [
+                pl for pl in (plugin.supported_layers if plugin else [])
+                if pl.lower() not in app_layer_names_lower
+            ]
+        if unassigned:
+            names = ", ".join(unassigned)
+            answer = QMessageBox.warning(
+                self,
+                "Unassigned Model Layers",
+                f"The following model layer(s) are not assigned to any workspace "
+                f"layer and will be ignored:\n\n  {names}\n\nProceed anyway?",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Ok:
+                return
+
         self._show_busy_overlay("Running AI model…")
 
         self._autolabel_worker = _AutolabelWorker(self._controller, plugin_id, self)
@@ -682,7 +712,26 @@ class MainWindow(QMainWindow):
             self._save_project_config()
 
     def _cb_autolabel_plugin_changed(self, plugin_id: Optional[str]) -> None:
-        """Refresh the mapping indicator when the selected plugin changes."""
+        """Refresh the mapping indicator when the selected plugin changes.
+
+        When a plugin with no saved configuration is selected, an initial
+        layer mapping is created automatically by matching plugin layer
+        names to workspace layer names (case-insensitive).
+        """
+        if plugin_id and plugin_id not in self._controller.state.plugin_configs:
+            plugin = self._controller.autolabel_service.get_plugin_by_id(plugin_id)
+            if plugin is not None:
+                app_layer_names = [lc.name for lc in self._controller.layer_configs]
+                app_layers_lower = {n.lower(): n for n in app_layer_names}
+                auto_mapping = {
+                    pl: app_layers_lower.get(pl.lower())
+                    for pl in plugin.supported_layers
+                }
+                if any(v is not None for v in auto_mapping.values()):
+                    self._controller.state.plugin_configs[plugin_id] = PluginConfig(
+                        layer_mapping=auto_mapping,
+                    )
+
         has_mapping = bool(
             plugin_id and plugin_id in self._controller.state.plugin_configs
         )
