@@ -181,8 +181,15 @@ class ActionLogger:
     def log_erase_all(self, delta: dict) -> None:
         self._write({"action": "erase_all", **delta})
 
-    def log_autolabel_start(self, plugin_id: str) -> None:
-        self._write({"action": "autolabel_start", "plugin_id": plugin_id})
+    def log_autolabel_start(
+        self,
+        plugin_id: str,
+        model_config: dict | None = None,
+    ) -> None:
+        entry: dict = {"action": "autolabel_start", "plugin_id": plugin_id}
+        if model_config is not None:
+            entry["model_config"] = model_config
+        self._write(entry)
 
     def log_autolabel_end(
         self,

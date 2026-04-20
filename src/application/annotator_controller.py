@@ -486,11 +486,13 @@ class AnnotatorController:
         if not self._document or not self._metadata:
             return "No image loaded"
 
+        plugin_config = self._state.plugin_configs.get(plugin_id)
+
         if self._action_logger:
-            self._action_logger.log_autolabel_start(plugin_id)
+            config_dict = vars(plugin_config) if plugin_config is not None else None
+            self._action_logger.log_autolabel_start(plugin_id, model_config=config_dict)
 
         t0 = time.time()
-        plugin_config = self._state.plugin_configs.get(plugin_id)
         success, error = self._autolabel.run(plugin_id, self._document, self._metadata, plugin_config)
         duration = time.time() - t0
 
