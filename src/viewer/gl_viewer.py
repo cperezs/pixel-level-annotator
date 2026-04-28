@@ -763,13 +763,22 @@ class _GLCanvas(QOpenGLWidget):
         GL.glDrawArrays(GL.GL_TRIANGLES, 0, 6)
         GL.glBindVertexArray(0)
 
+    def _has_animated_content(self) -> bool:
+        """Return True if any animated layer is visible and has data."""
+        sel = self._layers.get(_L_SEL)
+        miss = self._layers.get(_L_MISSING)
+        return (
+            (sel is not None and sel.data is not None and sel.visible) or
+            (miss is not None and miss.data is not None and miss.visible)
+        )
+
     def _tick_animation(self) -> None:
         """Advance animation clock and request a repaint."""
+        if not self._has_animated_content():
+            self._anim_timer.stop()
+            return
         self._anim_time = _time_module.monotonic() - self._anim_start
-        sel = self._layers.get(_L_SEL)
-        missing = self._layers.get(_L_MISSING)
-        if (sel and sel.visible) or (missing and missing.visible):
-            self.update()
+        self.update()
 
     def start_animation(self) -> None:
         """Start animation timer (drives marching-ants selection and missing-pixels glow)."""
@@ -778,11 +787,8 @@ class _GLCanvas(QOpenGLWidget):
 
     def stop_animation(self) -> None:
         """Stop animation timer only when no animated layer needs it."""
-        sel = self._layers.get(_L_SEL)
-        missing = self._layers.get(_L_MISSING)
-        if (sel and sel.visible) or (missing and missing.visible):
-            return  # at least one animated layer still active — keep timer running
-        self._anim_timer.stop()
+        if not self._has_animated_content():
+            self._anim_timer.stop()
 
     def _draw_grid(self) -> None:
         verts = self._vp.fullscreen_quad()
@@ -881,6 +887,7 @@ class GLImageAnnotationViewer(QWidget):
     # ── IImageAnnotationViewer — display API ────────────────────────────
 
     def set_base_image(self, bgr: np.ndarray) -> None:
+        self._canvas._anim_timer.stop()
         # Convert BGR → RGB for upload
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
