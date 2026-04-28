@@ -186,7 +186,6 @@ void main() {
     vec2 frac_uv = fract(v_uv / u_texel);
 
     // Screen-pixel distance to the adjacent edge in each direction.
-    // If the neighbor is annotated, that edge is not a boundary (distance = infinity).
     float dn = (n < 0.01) ? frac_uv.y         * u_zoom : 1e9;
     float ds = (s < 0.01) ? (1.0 - frac_uv.y) * u_zoom : 1e9;
     float de = (e < 0.01) ? (1.0 - frac_uv.x) * u_zoom : 1e9;
@@ -194,10 +193,11 @@ void main() {
     float min_dist = min(min(dn, ds), min(de, dw));
 
     if (min_dist < 1.0) {
-        // Inner border: same hue as the fill, fully opaque
-        frag = vec4(c.rgb, 0.95);
+        // Inner border: more opaque than fill, scaled with global opacity
+        frag = vec4(c.rgb, clamp(u_opacity * 1.5, 0.0, 0.95));
     } else {
-        frag = vec4(c.rgb, c.a * u_opacity);
+        // Fill: u_opacity controls directly (0=invisible, 1=solid)
+        frag = vec4(c.rgb, u_opacity);
     }
 }
 """
@@ -478,6 +478,7 @@ class _GLCanvas(QOpenGLWidget):
         self._img_w: int = 0
         self._img_h: int = 0
         self._grid_visible: bool = False
+        self._global_ann_opacity: float = 0.7
 
         # GL objects — allocated in initializeGL()
         self._prog_rgba: int = 0
@@ -724,7 +725,7 @@ class _GLCanvas(QOpenGLWidget):
         GL.glActiveTexture(GL.GL_TEXTURE0)
         GL.glBindTexture(GL.GL_TEXTURE_2D, layer.tex_id)
         GL.glUniform1i(GL.glGetUniformLocation(self._prog_ann, b"u_tex"), 0)
-        GL.glUniform1f(GL.glGetUniformLocation(self._prog_ann, b"u_opacity"), layer.opacity)
+        GL.glUniform1f(GL.glGetUniformLocation(self._prog_ann, b"u_opacity"), self._global_ann_opacity)
         GL.glUniform1f(GL.glGetUniformLocation(self._prog_ann, b"u_zoom"), self._vp.zoom)
         if self._img_w > 0 and self._img_h > 0:
             GL.glUniform2f(GL.glGetUniformLocation(self._prog_ann, b"u_texel"),
@@ -789,6 +790,11 @@ class _GLCanvas(QOpenGLWidget):
         """Stop animation timer only when no animated layer needs it."""
         if not self._has_animated_content():
             self._anim_timer.stop()
+
+    def set_global_layer_opacity(self, opacity: float) -> None:
+        """Set global opacity multiplier for annotation layers."""
+        self._global_ann_opacity = max(0.0, min(1.0, opacity))
+        self.update()
 
     def _draw_grid(self) -> None:
         verts = self._vp.fullscreen_quad()
@@ -987,6 +993,9 @@ class GLImageAnnotationViewer(QWidget):
     def set_grid_visible(self, visible: bool) -> None:
         self._canvas._grid_visible = visible
         self._canvas.update()
+
+    def set_global_layer_opacity(self, opacity: float) -> None:
+        self._canvas.set_global_layer_opacity(opacity)
 
     # ── IImageAnnotationViewer — zoom / viewport ─────────────────────────
 

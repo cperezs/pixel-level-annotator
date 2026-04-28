@@ -80,6 +80,7 @@ class ViewState:
     show_other_layers: bool = True
     show_missing_pixels: bool = False
     show_grid: bool = False
+    global_layer_opacity: float = 0.7
 
 
 @dataclass
@@ -122,6 +123,7 @@ class ToolbarState:
     show_other_layers: bool = True
     show_missing_pixels: bool = False
     show_grid: bool = True
+    global_layer_opacity: float = 0.7
 
 
 # ------------------------------------------------------------------

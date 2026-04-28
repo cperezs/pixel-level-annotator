@@ -53,9 +53,7 @@ class _ClickableSlider(QSlider):
             else:
                 val = self.maximum() - (self.maximum() - self.minimum()) * event.position().y() / self.height()
             self.setValue(int(round(val)))
-            event.accept()
-        else:
-            super().mousePressEvent(event)
+        super().mousePressEvent(event)
 
 
 def _section_header(text: str) -> QLabel:

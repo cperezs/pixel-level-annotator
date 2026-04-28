@@ -93,6 +93,8 @@ class QtImageAnnotationViewer(QWidget):
         self._q_grid:        Optional[QGraphicsPixmapItem] = None
 
         self._grid_visible: bool = False
+        self._global_ann_opacity: float = 0.7
+        self._ann_rgba: Optional[np.ndarray] = None
 
         # Cursor cache: {(tool_name, (r, g, b)): QCursor}
         self._cursor_cache: dict[tuple, QCursor] = {}
@@ -162,12 +164,27 @@ class QtImageAnnotationViewer(QWidget):
     def set_annotation_overlay(self, rgba: np.ndarray) -> None:
         if self._q_annotations is None:
             return
-        self._q_annotations.setPixmap(self._rgba_to_pixmap(rgba))
+        self._ann_rgba = rgba
+        self._refresh_annotations()
+
+    def _refresh_annotations(self) -> None:
+        if self._q_annotations is None or self._ann_rgba is None:
+            return
+        display = self._ann_rgba.copy()
+        annotated = self._ann_rgba[:, :, 3] > 0
+        alpha_value = int(self._global_ann_opacity * 255)
+        display[:, :, 3] = np.where(annotated, alpha_value, 0).astype(np.uint8)
+        self._q_annotations.setPixmap(self._rgba_to_pixmap(display))
         self._q_annotations.setScale(self._zoom)
 
     def set_annotations_visible(self, visible: bool) -> None:
         if self._q_annotations:
             self._q_annotations.setVisible(visible)
+
+    def set_global_layer_opacity(self, opacity: float) -> None:
+        self._global_ann_opacity = max(0.0, min(1.0, opacity))
+        if self._q_annotations is not None:
+            self._refresh_annotations()
 
     def set_selection_mask(
         self,

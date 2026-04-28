@@ -101,6 +101,7 @@ class ProjectManager:
             config.last_image = data.get("last_image", config.last_image)
             config.selected_plugin_id = data.get("selected_plugin_id", config.selected_plugin_id)
             config.plugin_configs = data.get("plugin_configs", config.plugin_configs)
+            config.global_layer_opacity = data.get("global_layer_opacity", config.global_layer_opacity)
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Could not read project config from %s: %s", config_path, exc)
         return config

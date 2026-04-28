@@ -248,6 +248,8 @@ class MainWindow(QMainWindow):
         s.session.active_layer = cfg.active_layer
         s.session.locked_layers = set(cfg.locked_layers)
         s.session.hidden_layers = set(cfg.hidden_layers)
+        # Restore global layer opacity
+        controller.set_global_layer_opacity(cfg.global_layer_opacity)
         # Restore plugin configs
         for pid, pcfg in cfg.plugin_configs.items():
             s.plugin_configs[pid] = PluginConfig(
@@ -340,6 +342,7 @@ class MainWindow(QMainWindow):
         cfg.active_layer = s.session.active_layer
         cfg.locked_layers = list(s.session.locked_layers)
         cfg.hidden_layers = list(s.session.hidden_layers)
+        cfg.global_layer_opacity = s.view.global_layer_opacity
         cfg.last_image = self._controller.current_filename
         cfg.selected_plugin_id = self._right_panel.get_selected_plugin_id()
         # Serialize plugin configs
@@ -542,6 +545,7 @@ class MainWindow(QMainWindow):
         rp.on_autolabel_configure(self._cb_configure_autolabel)
         rp.on_autolabel_plugin_changed(self._cb_autolabel_plugin_changed)
         rp.on_open_project(self._ask_open_project)
+        rp.on_opacity_changed(ctrl.set_global_layer_opacity)
 
     def _wire_gallery(self) -> None:
         self._gallery.on_image_selected(self._on_gallery_image_selected)

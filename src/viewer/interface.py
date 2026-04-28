@@ -96,6 +96,11 @@ class IImageAnnotationViewer(ABC):
         threshold *and* this flag is ``True``.
         """
 
+    @abstractmethod
+    def set_global_layer_opacity(self, opacity: float) -> None:
+        """Set a global opacity multiplier (0.0–1.0) applied to all annotation layers."""
+        ...
+
     # ------------------------------------------------------------------
     # Zoom and viewport
     # ------------------------------------------------------------------

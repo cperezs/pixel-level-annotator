@@ -45,3 +45,6 @@ class ProjectConfig:
 
     # Per-plugin configurations: {plugin_id -> {key: value}}
     plugin_configs: dict[str, dict] = field(default_factory=dict)
+
+    # Global annotation layer opacity multiplier (0.0–1.0)
+    global_layer_opacity: float = 0.7

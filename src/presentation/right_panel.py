@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -379,6 +380,23 @@ class LayerMappingDialog(QDialog):
 
 
 # ------------------------------------------------------------------
+# Slider with click-to-position + drag support
+# ------------------------------------------------------------------
+
+class _OpacitySlider(QSlider):
+    """QSlider que salta al punto clicado y permite arrastrar normalmente."""
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.orientation() == Qt.Orientation.Horizontal:
+                val = self.minimum() + (self.maximum() - self.minimum()) * event.position().x() / self.width()
+            else:
+                val = self.maximum() - (self.maximum() - self.minimum()) * event.position().y() / self.height()
+            self.setValue(int(round(val)))
+        super().mousePressEvent(event)
+
+
+# ------------------------------------------------------------------
 # Layer row widget
 # ------------------------------------------------------------------
 
@@ -582,6 +600,7 @@ class RightPanel(QWidget):
         outer.addWidget(self._bottom_widget, 0)
 
         self._build_layers_section(layer_configs)
+        self._build_opacity_section()
         self._build_view_options()
         self._build_autolabel_section()
         self._layout.addStretch()
@@ -627,6 +646,9 @@ class RightPanel(QWidget):
     def on_toggle_all_lock(self, cb: Callable[[], None]) -> None:
         self._cb_toggle_all_lock = cb
 
+    def on_opacity_changed(self, cb: Callable[[float], None]) -> None:
+        self._cb_opacity_changed = cb
+
     def on_autolabel_run(self, cb: Callable) -> None:
         self._q_autolabel_run_button.clicked.connect(cb)
 
@@ -667,6 +689,11 @@ class RightPanel(QWidget):
 
         self._grid_visible_active = state.show_grid
         self._update_toggle_style(self._q_show_grid, state.show_grid)
+
+        self._q_opacity_slider.blockSignals(True)
+        self._q_opacity_slider.setValue(int(state.global_layer_opacity * 100))
+        self._q_opacity_slider.blockSignals(False)
+        self._q_opacity_value_label.setText(f"{int(state.global_layer_opacity * 100)}%")
 
     def set_project_name(self, name: str) -> None:
         """Update the displayed project name."""
@@ -844,6 +871,51 @@ class RightPanel(QWidget):
 
         if self._layer_rows:
             self._layer_rows[0].set_selected(True)
+
+    def _build_opacity_section(self) -> None:
+        self._cb_opacity_changed: Optional[Callable[[float], None]] = None
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {OUTLINE_VARIANT}; max-height: 1px; margin-top: 4px;")
+        self._layout.addWidget(sep)
+
+        lbl_header = QLabel("LAYER OPACITY")
+        lbl_header.setStyleSheet(
+            f"color: {ON_SURFACE_VARIANT}; font-size: {FONT_SIZE_XS}px; "
+            f"font-weight: 700; letter-spacing: 1.5px; margin-top: 4px;"
+        )
+        self._layout.addWidget(lbl_header)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        lbl_zero = QLabel("0")
+        lbl_zero.setStyleSheet(f"color: {ON_SURFACE_VARIANT}; font-size: {FONT_SIZE_XS}px;")
+        self._q_opacity_value_label = QLabel("70%")
+        self._q_opacity_value_label.setStyleSheet(
+            f"color: {ON_SURFACE}; font-size: {FONT_SIZE_XS}px; font-weight: 600;"
+        )
+        lbl_full = QLabel("100")
+        lbl_full.setStyleSheet(f"color: {ON_SURFACE_VARIANT}; font-size: {FONT_SIZE_XS}px;")
+        row.addWidget(lbl_zero)
+        row.addStretch()
+        row.addWidget(self._q_opacity_value_label)
+        row.addStretch()
+        row.addWidget(lbl_full)
+        self._layout.addLayout(row)
+
+        self._q_opacity_slider = _OpacitySlider(Qt.Orientation.Horizontal)
+        self._q_opacity_slider.setRange(0, 100)
+        self._q_opacity_slider.setValue(70)
+        self._q_opacity_slider.setToolTip("Global annotation layer opacity (0 = invisible, 100 = solid)")
+        self._q_opacity_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._q_opacity_slider.valueChanged.connect(self._on_opacity_slider_changed)
+        self._layout.addWidget(self._q_opacity_slider)
+
+    def _on_opacity_slider_changed(self, value: int) -> None:
+        self._q_opacity_value_label.setText(f"{value}%")
+        if self._cb_opacity_changed is not None:
+            self._cb_opacity_changed(value / 100.0)
 
     def _build_view_options(self) -> None:
         sep = QFrame()

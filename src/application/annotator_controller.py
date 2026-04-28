@@ -162,6 +162,7 @@ class AnnotatorController:
             show_other_layers=v.show_other_layers,
             show_missing_pixels=v.show_missing_pixels,
             show_grid=v.show_grid,
+            global_layer_opacity=v.global_layer_opacity,
         )
 
     # ------------------------------------------------------------------
@@ -467,6 +468,13 @@ class AnnotatorController:
     def toggle_show_grid(self, visible: bool) -> None:
         self._state.view.show_grid = visible
         self._viewer.set_grid_visible(visible)
+        self._state.notify("view")
+
+    def set_global_layer_opacity(self, opacity: float) -> None:
+        """Set the global annotation layer opacity multiplier (0.0–1.0)."""
+        clamped = max(0.0, min(1.0, opacity))
+        self._state.view.global_layer_opacity = clamped
+        self._viewer.set_global_layer_opacity(clamped)
         self._state.notify("view")
 
     def toggle_annotations_visible(self, visible: bool) -> None:
