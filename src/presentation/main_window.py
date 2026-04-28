@@ -200,13 +200,18 @@ class MainWindow(QMainWindow):
 
         # Populate gallery and load first image
         self._populate_gallery()
+
+        # Resolve target image BEFORE refresh_autolabel_plugins, which can
+        # trigger _cb_autolabel_plugin_changed → _save_project_config() and
+        # overwrite last_image with None (current_filename not set yet).
+        filenames = image_repo.list_images()
+        target = self._project_config.last_image
+
         plugins = controller.autolabel_service.get_compatible_plugins()
         saved_plugin = self._project_config.selected_plugin_id if self._project_config else None
         self._right_panel.refresh_autolabel_plugins(plugins, initial_plugin_id=saved_plugin)
 
         # Load last image or first available
-        filenames = image_repo.list_images()
-        target = self._project_config.last_image
         if target and target not in filenames:
             target = None
         if not target and filenames:
