@@ -51,6 +51,7 @@ class ImageDocument:
         self._annotations = np.asarray(annotations, dtype=np.uint8)
         self._source_path = source_path
         self._undo_stack: deque[np.ndarray] = deque(maxlen=_MAX_UNDO)
+        self._redo_stack: deque[np.ndarray] = deque(maxlen=_MAX_UNDO)
         # Greyscale cache — computed once; used by compute_similarity_mask.
         self._gray: np.ndarray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
@@ -144,7 +145,19 @@ class ImageDocument:
         """
         if not self._undo_stack:
             return False
+        self._redo_stack.append(self._annotations.copy())
         self._annotations = self._undo_stack.pop()
+        return True
+
+    def redo(self) -> bool:
+        """Redo the last undone annotation operation.
+
+        Returns True if there was something to redo, False otherwise.
+        """
+        if not self._redo_stack:
+            return False
+        self._undo_stack.append(self._annotations.copy())
+        self._annotations = self._redo_stack.pop()
         return True
 
     # ------------------------------------------------------------------
@@ -291,6 +304,7 @@ class ImageDocument:
     # ------------------------------------------------------------------
 
     def _push_undo(self) -> None:
+        self._redo_stack.clear()
         self._undo_stack.append(self._annotations.copy())
 
     def _trim_undo_if_unchanged(self) -> None:

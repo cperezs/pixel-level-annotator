@@ -464,6 +464,21 @@ class AnnotatorController:
                 self._image_repo.save_annotations(self._document, self._current_filename)
                 self._sync_annotation_overlay()
                 self._notify_progress()
+                self._state.notify("session")
+
+    def redo(self) -> None:
+        """Redo the last undone annotation. No-op if the redo stack is empty."""
+        if self._document is None:
+            return
+        if self._document.redo():
+            self._image_repo.save_annotations(self._document, self._current_filename)
+            self._sync_annotation_overlay()
+            self._notify_progress()
+            self._state.notify("session")
+
+    @property
+    def can_redo(self) -> bool:
+        return self._document is not None and bool(self._document._redo_stack)
 
     def erase_all(self) -> None:
         """Clear every annotation on the current image (undoable)."""
@@ -681,11 +696,14 @@ class AnnotatorController:
         elif key == "G":
             self.toggle_show_grid(not self._state.view.show_grid)
 
-        elif key == "Z" and "ctrl" in mods:
+        elif key == "Z" and "ctrl" in mods and "shift" not in mods:
             if tool.is_drawing:
                 self._cancel_tool()
             else:
                 self.undo()
+
+        elif (key == "Y" and "ctrl" in mods) or (key == "Z" and "ctrl" in mods and "shift" in mods):
+            self.redo()
 
         elif key == "Plus":
             if tool.active == "pen":

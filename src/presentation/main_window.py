@@ -538,6 +538,10 @@ class MainWindow(QMainWindow):
         self._q_undo_btn = self._topbar_button("↶", "Undo (Ctrl+Z)")
         right.addWidget(self._q_undo_btn)
 
+        self._q_redo_btn = self._topbar_button("↷", "Redo (Ctrl+Y)")
+        self._q_redo_btn.setEnabled(False)
+        right.addWidget(self._q_redo_btn)
+
         sep = QLabel()
         sep.setFixedSize(1, 16)
         sep.setStyleSheet(f"background-color: rgba(72, 72, 72, 0.2);")
@@ -602,6 +606,7 @@ class MainWindow(QMainWindow):
 
         # Top bar buttons
         self._q_undo_btn.clicked.connect(ctrl.undo)
+        self._q_redo_btn.clicked.connect(ctrl.redo)
         self._q_zoom_in_btn.clicked.connect(lambda: ctrl.zoom_in())
         self._q_zoom_out_btn.clicked.connect(lambda: ctrl.zoom_out())
 
@@ -634,6 +639,7 @@ class MainWindow(QMainWindow):
         self._toolbar.sync(state)
         self._right_panel.sync(state)
         self._q_zoom_label.setText(f"{self._controller.get_zoom_percent()}%")
+        self._q_redo_btn.setEnabled(self._controller.can_redo)
 
     def _on_progress_changed(self, progress: int) -> None:
         self._progress_value = progress
