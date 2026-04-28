@@ -1198,10 +1198,17 @@ def _button_name(button) -> str:
 
 def _key_name(key) -> str:
     _map = {
+        Qt.Key.Key_P:      "P",
+        Qt.Key.Key_S:      "S",
+        Qt.Key.Key_F:      "F",
         Qt.Key.Key_Z:      "Z",
         Qt.Key.Key_E:      "E",
         Qt.Key.Key_R:      "R",
+        Qt.Key.Key_I:      "I",
+        Qt.Key.Key_M:      "M",
+        Qt.Key.Key_G:      "G",
         Qt.Key.Key_Plus:   "Plus",
+        Qt.Key.Key_Equal:  "Plus",
         Qt.Key.Key_Minus:  "Minus",
         Qt.Key.Key_Space:  "Space",
         Qt.Key.Key_Escape: "Escape",

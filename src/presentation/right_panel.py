@@ -419,15 +419,6 @@ class _LayerRow(QFrame):
         )
         layout.addWidget(self._name_label, 1)
 
-        # Shortcut (invisible)
-        if index < 9:
-            shortcut_btn = QPushButton()
-            shortcut_btn.setShortcut(str(index + 1))
-            shortcut_btn.setFixedSize(0, 0)
-            shortcut_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            shortcut_btn.clicked.connect(lambda: self._fire_selected())
-            layout.addWidget(shortcut_btn)
-
         # Visibility button (right side)
         self._vis_btn = QPushButton("\U0001F441")
         self._vis_btn.setFixedSize(28, 28)
@@ -833,12 +824,10 @@ class RightPanel(QWidget):
         self._missing_pixels_active = False
 
         self._q_show_image = self._create_toggle_button("👁  Show Image (I)", True)
-        self._q_show_image.setShortcut("i")
         self._q_show_image.clicked.connect(self._toggle_show_image)
         self._layout.addWidget(self._q_show_image)
 
         self._q_missing_pixels = self._create_toggle_button("⚠  Missing Pixels (M)", False)
-        self._q_missing_pixels.setShortcut("m")
         self._q_missing_pixels.clicked.connect(self._toggle_missing_pixels)
         self._layout.addWidget(self._q_missing_pixels)
 

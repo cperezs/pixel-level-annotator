@@ -663,7 +663,25 @@ class AnnotatorController:
     def handle_key_release(self, key: str, mods: frozenset) -> None:  # noqa: C901
         tool = self._state.tool
 
-        if key == "Z" and "ctrl" in mods:
+        if key == "P":
+            self.select_tool("pen")
+
+        elif key == "S":
+            self.select_tool("selector")
+
+        elif key == "F":
+            self.select_tool("fill")
+
+        elif key == "I":
+            self.toggle_show_image(not self._state.view.show_image)
+
+        elif key == "M":
+            self.toggle_show_missing_pixels(not self._state.view.show_missing_pixels)
+
+        elif key == "G":
+            self.toggle_show_grid(not self._state.view.show_grid)
+
+        elif key == "Z" and "ctrl" in mods:
             if tool.is_drawing:
                 self._cancel_tool()
             else:

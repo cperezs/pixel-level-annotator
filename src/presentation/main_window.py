@@ -75,15 +75,24 @@ logger = logging.getLogger(__name__)
 # Keys recognised by the controller (must match viewer._key_name logic)
 # ---------------------------------------------------------------------------
 _KEY_MAP = {
+    Qt.Key.Key_P:      "P",
+    Qt.Key.Key_S:      "S",
+    Qt.Key.Key_F:      "F",
     Qt.Key.Key_Z:      "Z",
+    Qt.Key.Key_Y:      "Y",
     Qt.Key.Key_E:      "E",
     Qt.Key.Key_R:      "R",
+    Qt.Key.Key_I:      "I",
+    Qt.Key.Key_M:      "M",
+    Qt.Key.Key_G:      "G",
     Qt.Key.Key_Plus:   "Plus",
+    Qt.Key.Key_Equal:  "Plus",   # unshifted + on some keyboards
     Qt.Key.Key_Minus:  "Minus",
     Qt.Key.Key_Space:  "Space",
     Qt.Key.Key_Escape: "Escape",
     Qt.Key.Key_Return: "Return",
     Qt.Key.Key_Enter:  "Return",
+    Qt.Key.Key_F1:     "F1",
     **{getattr(Qt.Key, f"Key_{i}"): str(i) for i in range(1, 10)},
 }
 
@@ -830,6 +839,9 @@ class MainWindow(QMainWindow):
             self._controller.finalize_autolabel()
             plugins = self._controller.autolabel_service.get_compatible_plugins()
             self._right_panel.refresh_autolabel_plugins(plugins)
+        # FEATURE-018: return keyboard focus to the canvas after the model finishes.
+        if hasattr(self, "_viewer"):
+            QTimer.singleShot(0, self._viewer.setFocus)
 
     def _show_busy_overlay(self, message: str = "Processing…") -> None:
         """Cover the entire window with a translucent blocking overlay."""

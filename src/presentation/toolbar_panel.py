@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -187,7 +186,6 @@ class ToolbarPanel(QWidget):
         self._build_gallery_button()
         self._build_web_service_section()
         self._layout.addStretch()
-        self._build_shortcuts()
 
         # Select the default tool visually
         self.set_active_tool("selector")
@@ -520,27 +518,6 @@ class ToolbarPanel(QWidget):
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
-
-    def _build_shortcuts(self) -> None:
-        """Register keyboard shortcuts via QShortcut so they work regardless
-        of which widget holds focus.
-
-        * S / P / F / W → ApplicationShortcut: fire from anywhere.
-        * E (erase)      → WidgetWithChildrenShortcut: fires only when the
-          toolbar (or one of its children) has focus.  When the GL canvas has
-          focus the controller handles 'E' context-sensitively (expand-
-          selection while drawing, otherwise switch to erase).
-        """
-        for key, tool in [("s", "selector"), ("p", "pen"), ("f", "fill")]:
-            sc = QShortcut(QKeySequence(key), self)
-            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
-            sc.activated.connect(lambda t=tool: self._fire_tool(t))
-
-        # 'e' must not be ApplicationShortcut: that would swallow the key event
-        # before the viewer can use it for selection expansion.
-        sc_e = QShortcut(QKeySequence("e"), self)
-        sc_e.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        sc_e.activated.connect(lambda: self._fire_tool("erase"))
 
     def _fire_tool(self, tool: str) -> None:
         mapping = {
