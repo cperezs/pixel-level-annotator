@@ -621,6 +621,12 @@ class RightPanel(QWidget):
         for row in self._layer_rows:
             row.on_lock_toggled(cb)
 
+    def on_toggle_all_visibility(self, cb: Callable[[], None]) -> None:
+        self._cb_toggle_all_visibility = cb
+
+    def on_toggle_all_lock(self, cb: Callable[[], None]) -> None:
+        self._cb_toggle_all_lock = cb
+
     def on_autolabel_run(self, cb: Callable) -> None:
         self._q_autolabel_run_button.clicked.connect(cb)
 
@@ -771,7 +777,10 @@ class RightPanel(QWidget):
             self._cb_open_project()
 
     def _build_layers_section(self, layer_configs: list[LayerConfig]) -> None:
-        # Layers header (simple text + count)
+        self._cb_toggle_all_visibility: Optional[Callable[[], None]] = None
+        self._cb_toggle_all_lock: Optional[Callable[[], None]] = None
+
+        # Layers header (text + count)
         h_row = QHBoxLayout()
         h_row.setContentsMargins(0, 0, 0, 4)
         title = QLabel("LAYERS")
@@ -787,6 +796,43 @@ class RightPanel(QWidget):
         h_row.addStretch()
         h_row.addWidget(count)
         self._layout.addLayout(h_row)
+
+        # "All layers" control row — buttons aligned with individual layer rows
+        _all_btn_style = (
+            "QPushButton { background: transparent; border: none; "
+            "font-size: 16px; padding: 0; border-radius: 4px; }"
+            "QPushButton:hover { background: rgba(161, 250, 255, 0.15); }"
+        )
+        all_row = QFrame()
+        all_row.setFixedHeight(30)
+        all_layout = QHBoxLayout(all_row)
+        all_layout.setContentsMargins(6, 0, 4, 0)
+        all_layout.setSpacing(4)
+        all_lbl = QLabel("All layers")
+        all_lbl.setStyleSheet(
+            f"color: {ON_SURFACE_VARIANT}; font-size: {FONT_SIZE_XS}px; font-weight: 500;"
+        )
+        all_layout.addWidget(all_lbl, 1)
+
+        self._vis_all_btn = QPushButton("\U0001F441")
+        self._vis_all_btn.setFixedSize(28, 28)
+        self._vis_all_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._vis_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._vis_all_btn.setToolTip("Show/Hide all layers (V)")
+        self._vis_all_btn.setStyleSheet(_all_btn_style)
+        self._vis_all_btn.clicked.connect(self._on_toggle_all_visibility_clicked)
+        all_layout.addWidget(self._vis_all_btn)
+
+        self._lock_all_btn = QPushButton("\U0001F512")
+        self._lock_all_btn.setFixedSize(28, 28)
+        self._lock_all_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._lock_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._lock_all_btn.setToolTip("Lock/Unlock all layers (L)")
+        self._lock_all_btn.setStyleSheet(_all_btn_style)
+        self._lock_all_btn.clicked.connect(self._on_toggle_all_lock_clicked)
+        all_layout.addWidget(self._lock_all_btn)
+
+        self._layout.addWidget(all_row)
 
         # Layer rows
         self._layer_rows: list[_LayerRow] = []
@@ -922,6 +968,14 @@ class RightPanel(QWidget):
             row.set_selected(i == index)
         if self._cb_layer_selected:
             self._cb_layer_selected(index)
+
+    def _on_toggle_all_visibility_clicked(self) -> None:
+        if self._cb_toggle_all_visibility:
+            self._cb_toggle_all_visibility()
+
+    def _on_toggle_all_lock_clicked(self) -> None:
+        if self._cb_toggle_all_lock:
+            self._cb_toggle_all_lock()
 
     def _on_autolabel_combo_changed(self) -> None:
         plugin_id = self._q_autolabel_combo.currentData()

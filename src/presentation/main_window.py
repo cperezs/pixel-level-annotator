@@ -22,17 +22,13 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QEvent, QObject, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QAbstractSpinBox,
     QApplication,
-    QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -52,6 +48,7 @@ from presentation.right_panel import RightPanel, LayerMappingDialog
 from presentation.gallery_panel import GalleryPanel
 from presentation.status_bar import StatusBar
 from presentation.welcome_screen import WelcomeScreen
+from presentation.shortcut_manager import ShortcutManager
 from presentation.style import (
     GLOBAL_STYLESHEET,
     PRIMARY,
@@ -71,91 +68,7 @@ from infrastructure.webservice import WebService
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Keys recognised by the controller (must match viewer._key_name logic)
-# ---------------------------------------------------------------------------
-_KEY_MAP = {
-    Qt.Key.Key_P:      "P",
-    Qt.Key.Key_S:      "S",
-    Qt.Key.Key_F:      "F",
-    Qt.Key.Key_Z:      "Z",
-    Qt.Key.Key_Y:      "Y",
-    Qt.Key.Key_E:      "E",
-    Qt.Key.Key_R:      "R",
-    Qt.Key.Key_I:      "I",
-    Qt.Key.Key_M:      "M",
-    Qt.Key.Key_G:      "G",
-    Qt.Key.Key_Plus:   "Plus",
-    Qt.Key.Key_Equal:  "Plus",   # unshifted + on some keyboards
-    Qt.Key.Key_Minus:  "Minus",
-    Qt.Key.Key_Space:  "Space",
-    Qt.Key.Key_Escape: "Escape",
-    Qt.Key.Key_Return: "Return",
-    Qt.Key.Key_Enter:  "Return",
-    Qt.Key.Key_F1:     "F1",
-    **{getattr(Qt.Key, f"Key_{i}"): str(i) for i in range(1, 10)},
-}
 
-_TEXT_INPUT_TYPES = (QLineEdit, QAbstractSpinBox, QComboBox)
-
-
-class _GlobalShortcutFilter(QObject):
-    """Application-level event filter that routes keyboard shortcuts to the
-    controller regardless of which widget currently holds focus.
-
-    This fixes the unreliable Ctrl+Z (and other shortcuts) when the user
-    clicks a toolbar or panel control and the viewer loses keyboard focus.
-    The filter is a no-op when:
-    - No controller is active.
-    - A text-input widget has focus (typing must not be intercepted).
-    - The viewer itself has focus (its own keyEvent handles the shortcut).
-    """
-
-    def __init__(self, main_window: "MainWindow", parent=None) -> None:
-        super().__init__(parent)
-        self._window = main_window
-
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        t = event.type()
-        if t not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
-            return False
-
-        controller = self._window._controller
-        if controller is None:
-            return False
-
-        # Do not intercept when a text-entry widget has focus.
-        focused = QApplication.focusWidget()
-        if isinstance(focused, _TEXT_INPUT_TYPES):
-            return False
-
-        # Do not intercept when the viewer already has focus — its own
-        # keyPressEvent / keyReleaseEvent will handle the event normally.
-        if hasattr(self._window, "_viewer") and focused is self._window._viewer:
-            return False
-
-        key_name = _KEY_MAP.get(event.key(), "")
-        if not key_name:
-            return False
-
-        mods: set[str] = set()
-        m = event.modifiers()
-        if m & Qt.KeyboardModifier.ControlModifier:
-            mods.add("ctrl")
-        if m & Qt.KeyboardModifier.ShiftModifier:
-            mods.add("shift")
-        if m & Qt.KeyboardModifier.AltModifier:
-            mods.add("alt")
-        mods_fs = frozenset(mods)
-
-        if t == QEvent.Type.KeyPress:
-            controller.handle_key_press(key_name, mods_fs)
-        else:
-            controller.handle_key_release(key_name, mods_fs)
-
-        # Return False so the event still propagates (e.g. to update Qt focus
-        # indicators), but the controller has already acted on it.
-        return False
 
 
 class _AutolabelWorker(QThread):
@@ -206,7 +119,7 @@ class MainWindow(QMainWindow):
         # controller even when a sidebar widget temporarily holds focus.
         app = QApplication.instance()
         if app is not None:
-            self._shortcut_filter = _GlobalShortcutFilter(self)
+            self._shortcut_filter = ShortcutManager(self)
             app.installEventFilter(self._shortcut_filter)
             app.focusChanged.connect(self._on_focus_changed)
 
@@ -261,6 +174,7 @@ class MainWindow(QMainWindow):
         controller.on_web_service_image_ready(self._on_web_service_image_ready)
         controller.on_status_changed(self._on_status_changed)
         self._controller = controller
+        self._shortcut_filter.set_controller(controller)
         self._image_repo = image_repo
         self._layer_configs = layer_configs
 
@@ -618,6 +532,8 @@ class MainWindow(QMainWindow):
 
         rp.on_layer_selected(ctrl.set_active_layer)
         rp.on_layer_visibility_changed(ctrl.toggle_layer_visibility)
+        rp.on_toggle_all_visibility(ctrl.toggle_all_visibility)
+        rp.on_toggle_all_lock(ctrl.toggle_all_lock)
         rp.on_show_image_changed(ctrl.toggle_show_image)
         rp.on_show_missing_pixels_changed(ctrl.toggle_show_missing_pixels)
         rp.on_show_grid_changed(ctrl.toggle_show_grid)

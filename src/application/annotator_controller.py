@@ -349,6 +349,16 @@ class AnnotatorController:
             locked.add(layer_index)
         self._state.notify("session")
 
+    def toggle_all_lock(self) -> None:
+        """Lock all layers if any is unlocked; unlock all if all are locked."""
+        locked = self._state.session.locked_layers
+        if locked:
+            locked.clear()
+        else:
+            for i in range(len(self._layer_configs)):
+                locked.add(i)
+        self._state.notify("session")
+
     def is_layer_locked(self, layer_index: int) -> bool:
         return layer_index in self._state.session.locked_layers
 
@@ -359,6 +369,24 @@ class AnnotatorController:
             hidden.discard(layer_index)
         else:
             hidden.add(layer_index)
+        self._sync_annotation_overlay()
+        self._state.notify("session")
+
+    def toggle_layer_visibility_by_index(self, index: int) -> None:
+        """Toggle visibility of the layer at *index*. No-op if out of range."""
+        if index < 0 or index >= len(self._layer_configs):
+            return
+        visible = index not in self._state.session.hidden_layers
+        self.toggle_layer_visibility(index, not visible)
+
+    def toggle_all_visibility(self) -> None:
+        """Show all layers if any is hidden; hide all if all are visible."""
+        hidden = self._state.session.hidden_layers
+        if hidden:
+            hidden.clear()
+        else:
+            for i in range(len(self._layer_configs)):
+                hidden.add(i)
         self._sync_annotation_overlay()
         self._state.notify("session")
 
