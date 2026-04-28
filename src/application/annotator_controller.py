@@ -84,6 +84,9 @@ class AnnotatorController:
         self._on_status_changed:          list[Callable[[], None]] = []
         self._image_dimensions: tuple[int, int] = (0, 0)
 
+        # Wheel scroll accumulator for throttling (units: angle delta, 120 = one notch).
+        self._wheel_accum: float = 0.0
+
         # Wire viewer input events → our handlers.
         viewer.register_mouse_press(self._handle_mouse_press)
         viewer.register_mouse_release(self._handle_mouse_release)
@@ -231,7 +234,9 @@ class AnnotatorController:
         # Initialise the viewer.
         self._viewer.set_base_image(doc.image)
         self._sync_annotation_overlay()
-        self._viewer.set_zoom(1)
+        self._viewer.zoom_reset()
+        self._viewer.set_grid_visible(self._state.view.show_grid)
+        self._state.notify("view")
         self._viewer.update_cursor(
             s.tool.active,
             self._layer_configs[0].color_rgb,
@@ -361,18 +366,23 @@ class AnnotatorController:
     # Zoom
     # ------------------------------------------------------------------
 
+    # Standard zoom levels (as scale factor; 1.0 = 100%).
+    # Match common levels in GIMP, Photoshop, Acrobat Reader.
+    _ZOOM_LEVELS = [
+        0.125, 0.25, 0.5, 0.75,
+        1.0, 1.5, 2.0, 3.0, 4.0,
+        6.0, 8.0, 10.0, 12.0, 16.0,
+    ]
+
     def zoom_in(self, center: Optional[tuple[float, float]] = None) -> None:
         zoom = self._state.view.zoom
-        if zoom >= 40:
-            return
         c = center or self._viewer.get_view_center()
-        if zoom < 1:
-            zoom_step = 0.25
-        elif zoom < 10:
-            zoom_step = 1
-        else:
-            zoom_step = 5 
-        new_zoom = zoom + zoom_step
+        new_zoom = next(
+            (lv for lv in self._ZOOM_LEVELS if lv > zoom + 1e-6),
+            None,
+        )
+        if new_zoom is None:
+            return
         self._state.view.zoom = new_zoom
         self._state.view.center_pos = c
         self._viewer.set_zoom(new_zoom, c)
@@ -380,16 +390,13 @@ class AnnotatorController:
 
     def zoom_out(self, center: Optional[tuple[float, float]] = None) -> None:
         zoom = self._state.view.zoom
-        if zoom <= 0.25:
-            return
         c = center or self._viewer.get_view_center()
-        if zoom <= 1:
-            zoom_step = 0.25
-        elif zoom <= 10:
-            zoom_step = 1
-        else:
-            zoom_step = 5
-        new_zoom = zoom - zoom_step
+        new_zoom = next(
+            (lv for lv in reversed(self._ZOOM_LEVELS) if lv < zoom - 1e-6),
+            None,
+        )
+        if new_zoom is None:
+            return
         self._state.view.zoom = new_zoom
         self._state.view.center_pos = c
         self._viewer.set_zoom(new_zoom, c)
@@ -404,7 +411,7 @@ class AnnotatorController:
 
     def get_zoom_percent(self) -> int:
         """Return the current zoom as a percentage (100 = 1×)."""
-        return self._state.view.zoom * 100
+        return int(round(self._state.view.zoom * 100))
 
     # ------------------------------------------------------------------
     # View toggles
@@ -641,9 +648,12 @@ class AnnotatorController:
         mods: frozenset,
     ) -> None:
         if "ctrl" in mods:
-            if dy > 0:
+            self._wheel_accum += dy
+            while self._wheel_accum >= 120:
+                self._wheel_accum -= 120
                 self.zoom_in(center=(px, py))
-            else:
+            while self._wheel_accum <= -120:
+                self._wheel_accum += 120
                 self.zoom_out(center=(px, py))
 
     def _handle_key_press(self, key: str, mods: frozenset) -> None:

@@ -842,9 +842,8 @@ class RightPanel(QWidget):
         self._q_missing_pixels.clicked.connect(self._toggle_missing_pixels)
         self._layout.addWidget(self._q_missing_pixels)
 
-        self._grid_visible_active = True
-        self._q_show_grid = self._create_toggle_button("⊞  Show Grid (G)", True)
-        self._q_show_grid.setShortcut("g")
+        self._grid_visible_active = False
+        self._q_show_grid = self._create_toggle_button("⊞  Show Grid (G)", False)
         self._q_show_grid.clicked.connect(self._toggle_show_grid)
         self._layout.addWidget(self._q_show_grid)
 

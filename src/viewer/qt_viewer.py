@@ -92,7 +92,7 @@ class QtImageAnnotationViewer(QWidget):
         self._q_tool:        Optional[QGraphicsPixmapItem] = None
         self._q_grid:        Optional[QGraphicsPixmapItem] = None
 
-        self._grid_visible: bool = True
+        self._grid_visible: bool = False
 
         # Cursor cache: {(tool_name, (r, g, b)): QCursor}
         self._cursor_cache: dict[tuple, QCursor] = {}
@@ -117,6 +117,11 @@ class QtImageAnnotationViewer(QWidget):
         self._pinch_accum: float = 0.0
         self._gesture_filter = _GestureEventFilter(self._on_native_gesture, self)
         self._view.viewport().installEventFilter(self._gesture_filter)
+
+        # Pan state (middle mouse button)
+        self._pan_active: bool = False
+        self._pan_last: Optional[tuple[int, int]] = None
+        self._active_cursor: Optional[QCursor] = None
 
     # ------------------------------------------------------------------
     # IImageAnnotationViewer — display API
@@ -270,6 +275,9 @@ class QtImageAnnotationViewer(QWidget):
         cy = (vbar.value() + vh // 2) / max(self._zoom, 1)
         return float(cx), float(cy)
 
+    def zoom_reset(self) -> None:
+        self.set_zoom(1)
+
     def update_cursor(
         self,
         tool: str,
@@ -282,8 +290,10 @@ class QtImageAnnotationViewer(QWidget):
             self._cursor_cache[key] = cursor
         if cursor:
             self._view.setCursor(cursor)
+            self._active_cursor = cursor
         else:
             self._view.setCursor(Qt.CursorShape.CrossCursor)
+            self._active_cursor = QCursor(Qt.CursorShape.CrossCursor)
 
     @property
     def widget(self) -> QWidget:
@@ -316,18 +326,43 @@ class QtImageAnnotationViewer(QWidget):
     # ------------------------------------------------------------------
 
     def _on_mouse_press(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._pan_active = True
+            self._pan_last = (int(event.position().x()), int(event.position().y()))
+            self._view.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
         px, py = self._to_pixel(event.pos())
         btn = _button_name(event.button())
         for cb in self._cb_mouse_press:
             cb(px, py, btn)
 
     def _on_mouse_release(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._pan_active = False
+            self._pan_last = None
+            if self._active_cursor is not None:
+                self._view.setCursor(self._active_cursor)
+            else:
+                self._view.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
         px, py = self._to_pixel(event.pos())
         btn = _button_name(event.button())
         for cb in self._cb_mouse_release:
             cb(px, py, btn)
 
     def _on_mouse_move(self, event: QMouseEvent) -> None:
+        if self._pan_active and self._pan_last is not None:
+            x, y = int(event.position().x()), int(event.position().y())
+            dx, dy = x - self._pan_last[0], y - self._pan_last[1]
+            self._pan_last = (x, y)
+            hbar = self._view.horizontalScrollBar()
+            vbar = self._view.verticalScrollBar()
+            hbar.setValue(hbar.value() - dx)
+            vbar.setValue(vbar.value() - dy)
+            event.accept()
+            return
         px, py = self._to_pixel(event.pos())
         for cb in self._cb_mouse_move:
             cb(px, py)

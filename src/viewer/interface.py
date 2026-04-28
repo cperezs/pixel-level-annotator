@@ -113,6 +113,11 @@ class IImageAnnotationViewer(ABC):
         """
 
     @abstractmethod
+    def zoom_reset(self) -> None:
+        """Reset zoom to 1:1 (100%) and center the image."""
+        ...
+
+    @abstractmethod
     def get_zoom(self) -> int:
         """Return the current zoom level."""
 

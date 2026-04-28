@@ -44,6 +44,21 @@ from presentation.style import (
 # Helpers
 # ------------------------------------------------------------------
 
+class _ClickableSlider(QSlider):
+    """QSlider que salta directamente al valor clicado en la pista."""
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.orientation() == Qt.Orientation.Horizontal:
+                val = self.minimum() + (self.maximum() - self.minimum()) * event.position().x() / self.width()
+            else:
+                val = self.maximum() - (self.maximum() - self.minimum()) * event.position().y() / self.height()
+            self.setValue(int(round(val)))
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+
 def _section_header(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet(
@@ -87,9 +102,10 @@ class _ToolButton(QPushButton):
         if active:
             self.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: {SURFACE_BRIGHT};
+                    background-color: rgba(161, 250, 255, 0.14);
                     color: {PRIMARY};
-                    border: none; border-radius: 6px;
+                    border: 1px solid rgba(161, 250, 255, 0.3);
+                    border-radius: 6px;
                     text-align: left; padding: 6px 10px;
                     font-size: {FONT_SIZE_SM}px; font-weight: 700;
                     letter-spacing: 0.5px;
@@ -315,7 +331,7 @@ class ToolbarPanel(QWidget):
         row.addWidget(self._q_threshold_value_label)
         card.card_layout.addLayout(row)
 
-        self._q_threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self._q_threshold_slider = _ClickableSlider(Qt.Orientation.Horizontal)
         self._q_threshold_slider.setMinimum(1)
         self._q_threshold_slider.setMaximum(128)
         self._q_threshold_slider.setValue(32)
@@ -350,7 +366,7 @@ class ToolbarPanel(QWidget):
         row.addWidget(self._q_pen_spin)
         card.card_layout.addLayout(row)
 
-        self._q_pen_slider = QSlider(Qt.Orientation.Horizontal)
+        self._q_pen_slider = _ClickableSlider(Qt.Orientation.Horizontal)
         self._q_pen_slider.setMinimum(1)
         self._q_pen_slider.setMaximum(50)
         self._q_pen_slider.setValue(1)
@@ -392,7 +408,7 @@ class ToolbarPanel(QWidget):
         row.addWidget(self._q_eraser_spin)
         card.card_layout.addLayout(row)
 
-        self._q_eraser_slider = QSlider(Qt.Orientation.Horizontal)
+        self._q_eraser_slider = _ClickableSlider(Qt.Orientation.Horizontal)
         self._q_eraser_slider.setMinimum(1)
         self._q_eraser_slider.setMaximum(50)
         self._q_eraser_slider.setValue(5)

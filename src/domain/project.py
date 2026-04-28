@@ -32,7 +32,7 @@ class ProjectConfig:
     show_image: bool = True
     show_other_layers: bool = True
     show_missing_pixels: bool = False
-    show_grid: bool = True
+    show_grid: bool = False
 
     # Session
     active_layer: int = 0
