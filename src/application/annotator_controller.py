@@ -92,8 +92,8 @@ class AnnotatorController:
         viewer.register_mouse_release(self._handle_mouse_release)
         viewer.register_mouse_move(self._handle_mouse_move)
         viewer.register_scroll(self._handle_scroll)
-        viewer.register_key_press(self._handle_key_press)
-        viewer.register_key_release(self._handle_key_release)
+        viewer.register_key_press(self.handle_key_press)
+        viewer.register_key_release(self.handle_key_release)
 
     # ------------------------------------------------------------------
     # Public read-only API for the presentation layer
@@ -656,11 +656,11 @@ class AnnotatorController:
                 self._wheel_accum += 120
                 self.zoom_out(center=(px, py))
 
-    def _handle_key_press(self, key: str, mods: frozenset) -> None:
+    def handle_key_press(self, key: str, mods: frozenset) -> None:
         if key == "Space":
             self._viewer.set_annotations_visible(False)
 
-    def _handle_key_release(self, key: str, mods: frozenset) -> None:  # noqa: C901
+    def handle_key_release(self, key: str, mods: frozenset) -> None:  # noqa: C901
         tool = self._state.tool
 
         if key == "Z" and "ctrl" in mods:
