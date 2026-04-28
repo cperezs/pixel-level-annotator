@@ -157,6 +157,11 @@ class MainWindow(QMainWindow):
         annotations_dir = os.path.join(folder, "annotations")
         image_repo = ImageRepository(images_dir, annotations_dir)
 
+        # Migrar archivos de anotación del esquema antiguo (índice) al nuevo (nombre de capa)
+        layer_names_for_migration = [lc.name for lc in layer_configs]
+        for img_filename in image_repo.list_images():
+            image_repo.migrate_index_to_name(img_filename, layer_names_for_migration)
+
         # Ensure project subdirectories exist
         os.makedirs(os.path.join(annotations_dir, "logs"), exist_ok=True)
         os.makedirs(os.path.join(annotations_dir, "metadata"), exist_ok=True)

@@ -74,3 +74,20 @@ def write_layers_file(layers: list[LayerConfig], path: str = "layers.txt") -> No
     with open(path, "w") as fh:
         for layer in layers:
             fh.write(f"{layer.name} {layer.color_hex}\n")
+
+
+# ------------------------------------------------------------------
+# Name sanitisation
+# ------------------------------------------------------------------
+
+import re
+
+
+def sanitize_name(name: str) -> str:
+    """Convert a layer name to a filesystem-safe suffix.
+
+    Examples: ``'My Layer 1!'`` → ``'My_Layer_1_'``,
+              ``'  '`` → ``'layer'``.
+    """
+    result = re.sub(r'[^a-zA-Z0-9_]', '_', name).strip('_')
+    return result if result else "layer"

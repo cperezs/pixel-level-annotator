@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import logging
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -74,7 +75,12 @@ class ImageRepository:
     # Loading
     # ------------------------------------------------------------------
 
-    def load(self, filename: str, nlayers: int) -> ImageDocument:
+    def load(
+        self,
+        filename: str,
+        nlayers: int,
+        layer_names: Optional[list[str]] = None,
+    ) -> ImageDocument:
         """Load *filename* and its annotation masks from disk.
 
         Parameters
@@ -83,6 +89,9 @@ class ImageRepository:
             Base filename (e.g. ``"img01.png"``), relative to *images_dir*.
         nlayers:
             Expected number of annotation layers.
+        layer_names:
+            Optional list of layer names used to resolve annotation files
+            by name scheme (falls back to index scheme if not found).
 
         Returns
         -------
@@ -95,11 +104,11 @@ class ImageRepository:
             raise FileNotFoundError(f"Cannot load image: {image_path}")
 
         h, w = bgr.shape[:2]
-        annotations = self._load_annotations(filename, nlayers, h, w)
+        annotations = self._load_annotations(filename, nlayers, h, w, layer_names)
         doc = ImageDocument(bgr, annotations, image_path)
 
         if np.all(annotations == 0):
-            self.save_annotations(doc, filename)
+            self.save_annotations(doc, filename, layer_names or [])
 
         logger.info("Loaded image: %s", image_path)
         return doc
@@ -108,14 +117,74 @@ class ImageRepository:
     # Saving
     # ------------------------------------------------------------------
 
-    def save_annotations(self, document: ImageDocument, filename: str) -> None:
+    def save_annotations(
+        self,
+        document: ImageDocument,
+        filename: str,
+        layer_names: list[str],
+    ) -> None:
         """Persist all annotation layers of *document* to disk."""
+        from domain.layer_config import sanitize_name
         os.makedirs(self._annotations_dir, exist_ok=True)
         stem = os.path.splitext(os.path.basename(filename))[0]
+        used_safe_names: set[str] = set()
         for i, mask in enumerate(document.annotations):
-            path = os.path.join(self._annotations_dir, f"{stem}_{i}.png")
+            if i < len(layer_names):
+                safe = sanitize_name(layer_names[i])
+                if safe in used_safe_names:
+                    safe = f"{safe}_{i}"
+                used_safe_names.add(safe)
+                path = os.path.join(self._annotations_dir, f"{stem}_{safe}.png")
+            else:
+                path = os.path.join(self._annotations_dir, f"{stem}_{i}.png")
             cv2.imwrite(path, mask)
         logger.debug("Saved annotations for: %s", filename)
+
+    def rename_annotation_files(
+        self,
+        filename: str,
+        old_name: str,
+        new_name: str,
+    ) -> None:
+        """Rename annotation files for a single image when a layer is renamed."""
+        from domain.layer_config import sanitize_name
+        stem = os.path.splitext(os.path.basename(filename))[0]
+        old_safe = sanitize_name(old_name)
+        new_safe = sanitize_name(new_name)
+        old_path = os.path.join(self._annotations_dir, f"{stem}_{old_safe}.png")
+        new_path = os.path.join(self._annotations_dir, f"{stem}_{new_safe}.png")
+        if os.path.isfile(old_path) and not os.path.isfile(new_path):
+            os.rename(old_path, new_path)
+            logger.debug("Renamed annotation: %s -> %s", old_path, new_path)
+
+    def delete_annotation_files(self, filename: str, layer_name: str) -> None:
+        """Delete the annotation file for a specific layer and image."""
+        from domain.layer_config import sanitize_name
+        stem = os.path.splitext(os.path.basename(filename))[0]
+        safe = sanitize_name(layer_name)
+        path = os.path.join(self._annotations_dir, f"{stem}_{safe}.png")
+        if os.path.isfile(path):
+            os.remove(path)
+            logger.debug("Deleted annotation: %s", path)
+
+    def migrate_index_to_name(
+        self,
+        filename: str,
+        layer_names: list[str],
+    ) -> None:
+        """Rename annotation files from index scheme to name scheme for a single image.
+
+        Skips if destination already exists (already migrated or name collision).
+        """
+        from domain.layer_config import sanitize_name
+        stem = os.path.splitext(os.path.basename(filename))[0]
+        for i, name in enumerate(layer_names):
+            old_path = os.path.join(self._annotations_dir, f"{stem}_{i}.png")
+            safe = sanitize_name(name)
+            new_path = os.path.join(self._annotations_dir, f"{stem}_{safe}.png")
+            if os.path.isfile(old_path) and not os.path.isfile(new_path):
+                os.rename(old_path, new_path)
+                logger.info("Migrated annotation: %s -> %s", old_path, new_path)
 
     # ------------------------------------------------------------------
     # Path helpers
@@ -140,24 +209,41 @@ class ImageRepository:
     # ------------------------------------------------------------------
 
     def _load_annotations(
-        self, filename: str, nlayers: int, h: int, w: int
+        self,
+        filename: str,
+        nlayers: int,
+        h: int,
+        w: int,
+        layer_names: Optional[list[str]] = None,
     ) -> np.ndarray:
+        from domain.layer_config import sanitize_name
         stem = os.path.splitext(os.path.basename(filename))[0]
-        layers: list[np.ndarray] = []
+        result = np.zeros((nlayers, h, w), dtype=np.uint8)
+        any_found = False
         for i in range(nlayers):
-            path = os.path.join(self._annotations_dir, f"{stem}_{i}.png")
-            if os.path.exists(path):
-                img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-                layers.append(img)
-                logger.debug("Loaded annotation: %s", path)
-            else:
-                break
+            # Try new scheme (layer name) first
+            if layer_names and i < len(layer_names):
+                safe = sanitize_name(layer_names[i])
+                new_path = os.path.join(self._annotations_dir, f"{stem}_{safe}.png")
+                if os.path.isfile(new_path):
+                    img = cv2.imread(new_path, cv2.IMREAD_GRAYSCALE)
+                    if img is not None:
+                        result[i] = img
+                        any_found = True
+                        logger.debug("Loaded annotation (name): %s", new_path)
+                        continue
+            # Fallback: old scheme (index)
+            old_path = os.path.join(self._annotations_dir, f"{stem}_{i}.png")
+            if os.path.isfile(old_path):
+                img = cv2.imread(old_path, cv2.IMREAD_GRAYSCALE)
+                if img is not None:
+                    result[i] = img
+                    any_found = True
+                    logger.debug("Loaded annotation (index): %s", old_path)
 
-        if len(layers) < nlayers:
+        if not any_found:
             logger.debug(
-                "Annotation files incomplete for %s — initialising %d blank layers.",
+                "No annotation files found for %s — initialising %d blank layers.",
                 filename, nlayers,
             )
-            layers = [np.zeros((h, w), dtype=np.uint8) for _ in range(nlayers)]
-
-        return np.array(layers, dtype=np.uint8)
+        return result

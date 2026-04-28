@@ -187,8 +187,9 @@ class AnnotatorController:
             )
 
         nlayers = len(self._layer_configs)
+        layer_names = [lc.name for lc in self._layer_configs]
         try:
-            doc = self._image_repo.load(filename, nlayers)
+            doc = self._image_repo.load(filename, nlayers, layer_names)
         except FileNotFoundError as exc:
             logger.error("Cannot load image: %s", exc)
             return False
@@ -497,7 +498,7 @@ class AnnotatorController:
                 if self._action_logger:
                     delta = self._action_logger.compute_delta(self._document.annotations)
                     self._action_logger.log_undo(delta)
-                self._image_repo.save_annotations(self._document, self._current_filename)
+                self._image_repo.save_annotations(self._document, self._current_filename, [lc.name for lc in self._layer_configs])
                 self._sync_annotation_overlay()
                 self._notify_progress()
                 self._state.notify("session")
@@ -507,7 +508,7 @@ class AnnotatorController:
         if self._document is None:
             return
         if self._document.redo():
-            self._image_repo.save_annotations(self._document, self._current_filename)
+            self._image_repo.save_annotations(self._document, self._current_filename, [lc.name for lc in self._layer_configs])
             self._sync_annotation_overlay()
             self._notify_progress()
             self._state.notify("session")
@@ -526,7 +527,7 @@ class AnnotatorController:
         if self._action_logger:
             delta = self._action_logger.compute_delta(self._document.annotations)
             self._action_logger.log_erase_all(delta)
-        self._image_repo.save_annotations(self._document, self._current_filename)
+        self._image_repo.save_annotations(self._document, self._current_filename, [lc.name for lc in self._layer_configs])
         self._sync_annotation_overlay()
         self._notify_progress()
 
@@ -566,7 +567,7 @@ class AnnotatorController:
         if not success:
             return error
 
-        self._image_repo.save_annotations(self._document, self._current_filename)
+        self._image_repo.save_annotations(self._document, self._current_filename, [lc.name for lc in self._layer_configs])
         if self._time_tracker:
             self._time_tracker.reset()
         return None
@@ -931,7 +932,7 @@ class AnnotatorController:
                 layer_name=self._layer_configs[layer].name,
                 delta=delta,
             )
-        self._image_repo.save_annotations(doc, self._current_filename)
+        self._image_repo.save_annotations(doc, self._current_filename, [lc.name for lc in self._layer_configs])
         if self._metadata:
             self._metadata.update_pixel_stats(
                 doc.annotations, image_size=(doc.height, doc.width)
