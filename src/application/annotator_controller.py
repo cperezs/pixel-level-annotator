@@ -264,8 +264,6 @@ class AnnotatorController:
         )
         self._state.notify("tool")
         self._notify_status()
-        if self._action_logger:
-            self._action_logger.log_tool_select(tool)
 
     def set_active_layer(self, layer_index: int) -> None:
         self._state.session.active_layer = layer_index
@@ -277,10 +275,6 @@ class AnnotatorController:
             self._layer_configs[layer_index].color_rgb,
         )
         self._state.notify("session")
-        if self._action_logger:
-            self._action_logger.log_layer_select(
-                layer_index, self._layer_configs[layer_index].name,
-            )
 
     def set_pen_size(self, size: int) -> None:
         self._state.tool.pen_size = max(1, min(50, size))
@@ -492,12 +486,9 @@ class AnnotatorController:
 
     def undo(self) -> None:
         if self._document:
-            if self._action_logger:
-                self._action_logger.snapshot_before(self._document.annotations)
             if self._document.undo():
                 if self._action_logger:
-                    delta = self._action_logger.compute_delta(self._document.annotations)
-                    self._action_logger.log_undo(delta)
+                    self._action_logger.pop_last_annotation_entry()
                 self._image_repo.save_annotations(self._document, self._current_filename, [lc.name for lc in self._layer_configs])
                 self._sync_annotation_overlay()
                 self._notify_progress()
@@ -508,6 +499,9 @@ class AnnotatorController:
         if self._document is None:
             return
         if self._document.redo():
+            if self._action_logger and self._action_logger._redo_log_stack:
+                group = self._action_logger._redo_log_stack[-1]
+                self._action_logger.replay_entry(group)
             self._image_repo.save_annotations(self._document, self._current_filename, [lc.name for lc in self._layer_configs])
             self._sync_annotation_overlay()
             self._notify_progress()
@@ -526,6 +520,7 @@ class AnnotatorController:
         self._document.clear_all_annotations()
         if self._action_logger:
             delta = self._action_logger.compute_delta(self._document.annotations)
+            self._action_logger.discard_redo_log_entries()
             self._action_logger.log_erase_all(delta)
         self._image_repo.save_annotations(self._document, self._current_filename, [lc.name for lc in self._layer_configs])
         self._sync_annotation_overlay()
@@ -549,6 +544,7 @@ class AnnotatorController:
 
         if self._action_logger:
             config_dict = vars(plugin_config) if plugin_config is not None else None
+            self._action_logger.discard_redo_log_entries()
             self._action_logger.log_autolabel_start(plugin_id, model_config=config_dict)
 
         t0 = time.time()
@@ -950,6 +946,7 @@ class AnnotatorController:
         doc = self._document
         if self._action_logger and tool:
             delta = self._action_logger.compute_delta(doc.annotations)
+            self._action_logger.discard_redo_log_entries()
             self._action_logger.log_annotation_commit(
                 tool=tool,
                 layer_index=layer,
