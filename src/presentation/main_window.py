@@ -49,6 +49,7 @@ from presentation.gallery_panel import GalleryPanel
 from presentation.status_bar import StatusBar
 from presentation.welcome_screen import WelcomeScreen
 from presentation.shortcut_manager import ShortcutManager
+from presentation.help_window import HelpWindow
 from presentation.style import (
     GLOBAL_STYLESHEET,
     PRIMARY,
@@ -102,6 +103,7 @@ class MainWindow(QMainWindow):
         self._controller: Optional[AnnotatorController] = None
         self._current_web_request = None
         self._save_timer: Optional[QTimer] = None
+        self._help_window: Optional[HelpWindow] = None
 
         # Stacked widget: 0 = welcome screen, 1 = annotator
         self._stack = QStackedWidget()
@@ -180,6 +182,7 @@ class MainWindow(QMainWindow):
         controller.on_status_changed(self._on_status_changed)
         self._controller = controller
         self._shortcut_filter.set_controller(controller)
+        self._shortcut_filter.set_help_callback(self._show_help)
         self._image_repo = image_repo
         self._layer_configs = layer_configs
 
@@ -231,6 +234,15 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(1)
         self.setWindowTitle(f"PixelLabeler — {self._project_config.name}")
         QTimer.singleShot(0, viewer.setFocus)
+
+    def _show_help(self) -> None:
+        if self._help_window and self._help_window.isVisible():
+            self._help_window.raise_()
+            return
+        self._help_window = HelpWindow.show_help(
+            ShortcutManager.SHORTCUTS,
+            parent=self,
+        )
 
     def _ensure_layers_file(self, folder: str) -> None:
         """Write a default layers.txt in *folder* when absent or empty."""
@@ -501,6 +513,15 @@ class MainWindow(QMainWindow):
         self._q_zoom_out_btn = self._topbar_button("−", "Zoom Out")
         self._q_zoom_out_btn.setShortcut("Ctrl+-")
         right.addWidget(self._q_zoom_out_btn)
+
+        sep2 = QLabel()
+        sep2.setFixedSize(1, 16)
+        sep2.setStyleSheet("background-color: rgba(72, 72, 72, 0.2);")
+        right.addWidget(sep2)
+
+        self._q_help_btn = self._topbar_button("?", "Help (H)")
+        self._q_help_btn.clicked.connect(self._show_help)
+        right.addWidget(self._q_help_btn)
 
         layout.addLayout(right)
         return bar

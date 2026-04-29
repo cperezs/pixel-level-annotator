@@ -12,7 +12,7 @@ Layer shortcuts:
 """
 from __future__ import annotations
 
-from typing import Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 from PyQt6.QtCore import QEvent, QObject, Qt
 from PyQt6.QtWidgets import QAbstractSpinBox, QApplication, QComboBox, QLineEdit
@@ -43,6 +43,7 @@ _KEY_MAP = {
     Qt.Key.Key_Escape: "Escape",
     Qt.Key.Key_Return: "Return",
     Qt.Key.Key_Enter:  "Return",
+    Qt.Key.Key_H:      "H",
     Qt.Key.Key_F1:     "F1",
     **{getattr(Qt.Key, f"Key_{i}"): str(i) for i in range(1, 10)},
 }
@@ -61,16 +62,46 @@ class ShortcutManager(QObject):
         mgr.set_controller(controller)
     """
 
+    # (category, key_label, description)
+    SHORTCUTS: list[tuple[str, str, str]] = [
+        # Tools
+        ("Tools", "P", "Pen tool"),
+        ("Tools", "E", "Eraser tool"),
+        ("Tools", "S", "Selector tool"),
+        ("Tools", "F", "Fill tool"),
+        # Edit
+        ("Edit", "Ctrl+Z", "Undo"),
+        ("Edit", "Ctrl+Y / Ctrl+Shift+Z", "Redo"),
+        ("Edit", "+", "Increase brush / threshold size"),
+        ("Edit", "-", "Decrease brush / threshold size"),
+        # View
+        ("View", "Space", "Hide annotations (hold)"),
+        ("View", "I", "Toggle source image"),
+        ("View", "M", "Toggle missing pixels overlay"),
+        ("View", "G", "Toggle grid"),
+        # Layers
+        ("Layers", "V", "Toggle all layers visibility"),
+        ("Layers", "L", "Toggle all layers lock"),
+        ("Layers", "Ctrl+1-9", "Toggle visibility of layer N"),
+        ("Layers", "Alt+1-9", "Toggle lock of layer N"),
+        # Help
+        ("Help", "H", "Show this help window"),
+    ]
+
     def __init__(self, main_window, parent=None) -> None:
         super().__init__(parent)
         self._window = main_window
         self._controller: Optional["AnnotatorController"] = None
+        self._on_help: Optional[Callable] = None
         # Digit keys consumed on press (Ctrl/Alt+digit) so their release
         # is also consumed, preventing an unintended layer-selection.
         self._consumed_digits: set[str] = set()
 
     def set_controller(self, controller: Optional["AnnotatorController"]) -> None:
         self._controller = controller
+
+    def set_help_callback(self, cb: Callable) -> None:
+        self._on_help = cb
 
     # ------------------------------------------------------------------
     # Event filter
@@ -105,7 +136,7 @@ class ShortcutManager(QObject):
         # Keys always handled by ShortcutManager regardless of which widget
         # has focus (the viewer included).
         is_manager_key = (
-            key_name in ("V", "L")
+            key_name in ("V", "L", "H")
             or (key_name in _DIGITS and ("ctrl" in mods_fs or "alt" in mods_fs))
             or (t == QEvent.Type.KeyRelease and key_name in self._consumed_digits)
         )
@@ -126,6 +157,11 @@ class ShortcutManager(QObject):
     # ------------------------------------------------------------------
 
     def _handle_press(self, key_name: str, mods: frozenset) -> bool:
+        if key_name == "H":
+            if self._on_help:
+                self._on_help()
+            return True
+
         if key_name == "V":
             if self._controller:
                 self._controller.toggle_all_visibility()
