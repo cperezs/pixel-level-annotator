@@ -85,6 +85,14 @@ class ImageDocument:
     def num_layers(self) -> int:
         return len(self._annotations)
 
+    @property
+    def annotation_coverage(self) -> float:
+        """Fraction of pixels annotated in any layer (0.0–1.0)."""
+        if self._annotations.size == 0:
+            return 0.0
+        any_annotated = np.any(self._annotations > 0, axis=0)
+        return float(np.sum(any_annotated)) / (self.height * self.width)
+
     # ------------------------------------------------------------------
     # Annotation mutations
     # ------------------------------------------------------------------

@@ -12,8 +12,9 @@ from typing import Callable, Optional
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QPixmap, QImage
+from PyQt6.QtCore import Qt, QSize, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QPixmap, QImage, QPainter, QFont, QColor
+from PyQt6.QtCore import QRect
 from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -49,8 +50,81 @@ _ANNOTATION_ALPHA = 0.45  # opacity for annotation colour overlay
 _thumb_cache: dict[tuple, "QPixmap"] = {}
 
 
+def _draw_coverage_badge(pixmap: QPixmap, coverage: float) -> QPixmap:
+    """Draw a small percentage badge on the bottom-right of *pixmap*."""
+    text = f"{int(coverage * 100)}%"
+    result = pixmap.copy()
+    painter = QPainter(result)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    font = QFont()
+    font.setPointSize(8)
+    font.setBold(True)
+    painter.setFont(font)
+    metrics = painter.fontMetrics()
+    rect = metrics.boundingRect(text)
+    badge_rect = QRect(
+        result.width() - rect.width() - 8,
+        result.height() - rect.height() - 4,
+        rect.width() + 6,
+        rect.height() + 2,
+    )
+    painter.fillRect(badge_rect, QColor(0, 0, 0, 160))
+    painter.setPen(QColor(255, 255, 255))
+    painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, text)
+    painter.end()
+    return result
+
+
+class _ThumbnailWorker(QThread):
+    """Background thread that regenerates a thumbnail with annotation overlay."""
+
+    thumbnail_ready = pyqtSignal(str, QPixmap)  # (filename, pixmap)
+
+    def __init__(self, filename: str, doc, layer_configs: list, thumb_size: int, parent=None):
+        super().__init__(parent)
+        self._filename = filename
+        self._doc = doc
+        self._layer_configs = layer_configs
+        self._thumb_size = thumb_size
+
+    def run(self):
+        try:
+            bgr = self._doc.image
+            h, w = bgr.shape[:2]
+            scale = self._thumb_size / max(h, w)
+            tw = max(1, int(round(w * scale)))
+            th = max(1, int(round(h * scale)))
+            base = cv2.resize(bgr, (tw, th), interpolation=cv2.INTER_AREA)
+            rgb = cv2.cvtColor(base, cv2.COLOR_BGR2RGB).astype(np.float32)
+
+            annotations = self._doc.annotations
+            alpha = _ANNOTATION_ALPHA
+            for i, layer in enumerate(self._layer_configs):
+                if i >= len(annotations):
+                    break
+                mask = annotations[i]
+                mask_small = cv2.resize(mask, (tw, th), interpolation=cv2.INTER_NEAREST)
+                nonzero = mask_small > 0
+                if not nonzero.any():
+                    continue
+                r, g, b = layer.color_rgb
+                for c, val in enumerate((r, g, b)):
+                    channel = rgb[:, :, c]
+                    channel[nonzero] = channel[nonzero] * (1 - alpha) + val * alpha
+
+            out = np.clip(rgb, 0, 255).astype(np.uint8)
+            qimg = QImage(out.tobytes(), tw, th, 3 * tw, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimg)
+            coverage = self._doc.annotation_coverage
+            pixmap = _draw_coverage_badge(pixmap, coverage)
+            self.thumbnail_ready.emit(self._filename, pixmap)
+        except Exception:
+            logger.exception("Error regenerating active thumbnail")
+
+
 def _load_thumbnail(path: str, annotations_dir: str = "", layers=None) -> Optional["QPixmap"]:
     """Load, scale and annotate a thumbnail, using a module-level cache."""
+    from domain.layer_config import sanitize_name
     try:
         mtime = os.stat(path).st_mtime_ns
     except OSError:
@@ -59,8 +133,8 @@ def _load_thumbnail(path: str, annotations_dir: str = "", layers=None) -> Option
     stem = os.path.splitext(os.path.basename(path))[0]
     ann_mtimes: list[int] = []
     if layers and annotations_dir:
-        for i in range(len(layers)):
-            ann_path = os.path.join(annotations_dir, f"{stem}_{i}.png")
+        for layer in layers:
+            ann_path = os.path.join(annotations_dir, f"{stem}_{sanitize_name(layer.name)}.png")
             try:
                 ann_mtimes.append(os.stat(ann_path).st_mtime_ns)
             except OSError:
@@ -82,8 +156,8 @@ def _load_thumbnail(path: str, annotations_dir: str = "", layers=None) -> Option
     rgb = cv2.cvtColor(base, cv2.COLOR_BGR2RGB).astype(np.float32)
 
     if layers and annotations_dir:
-        for i, layer in enumerate(layers):
-            ann_path = os.path.join(annotations_dir, f"{stem}_{i}.png")
+        for layer in layers:
+            ann_path = os.path.join(annotations_dir, f"{stem}_{sanitize_name(layer.name)}.png")
             mask = cv2.imread(ann_path, cv2.IMREAD_GRAYSCALE)
             if mask is None:
                 continue
@@ -99,6 +173,21 @@ def _load_thumbnail(path: str, annotations_dir: str = "", layers=None) -> Option
     out = np.clip(rgb, 0, 255).astype(np.uint8)
     qimg = QImage(out.tobytes(), tw, th, 3 * tw, QImage.Format.Format_RGB888)
     pixmap = QPixmap.fromImage(qimg)
+
+    # Compute coverage badge from annotation files
+    if layers and annotations_dir:
+        total_pixels = tw * th
+        any_annotated = np.zeros((th, tw), dtype=bool)
+        for layer in layers:
+            ann_path = os.path.join(annotations_dir, f"{stem}_{sanitize_name(layer.name)}.png")
+            mask = cv2.imread(ann_path, cv2.IMREAD_GRAYSCALE)
+            if mask is None:
+                continue
+            mask_small = cv2.resize(mask, (tw, th), interpolation=cv2.INTER_NEAREST)
+            any_annotated |= mask_small > 0
+        coverage = float(np.sum(any_annotated)) / total_pixels if total_pixels > 0 else 0.0
+        pixmap = _draw_coverage_badge(pixmap, coverage)
+
     _thumb_cache[key] = pixmap
     return pixmap
 
@@ -121,22 +210,22 @@ class _ThumbnailItem(QFrame):
         layout.setSpacing(2)
 
         # Thumbnail image
-        thumb_label = QLabel()
-        thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        thumb_label.setFixedSize(_THUMB_SIZE + 8, _THUMB_SIZE)
-        thumb_label.setStyleSheet("background: transparent; border: none;")
+        self._thumb_label = QLabel()
+        self._thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._thumb_label.setFixedSize(_THUMB_SIZE + 8, _THUMB_SIZE)
+        self._thumb_label.setStyleSheet("background: transparent; border: none;")
 
         image_path = os.path.join(images_dir, filename)
         pixmap = _load_thumbnail(image_path, annotations_dir, layers)
         if pixmap:
-            thumb_label.setPixmap(pixmap)
+            self._thumb_label.setPixmap(pixmap)
         else:
-            thumb_label.setText("?")
-            thumb_label.setStyleSheet(
+            self._thumb_label.setText("?")
+            self._thumb_label.setStyleSheet(
                 f"color: {ON_SURFACE_VARIANT}; font-size: 24px; "
                 f"background: {SURFACE}; border-radius: 4px;"
             )
-        layout.addWidget(thumb_label)
+        layout.addWidget(self._thumb_label)
 
         # Filename label
         name_label = QLabel(filename)
@@ -180,6 +269,10 @@ class _ThumbnailItem(QFrame):
                 }}
             """)
 
+    def update_pixmap(self, pixmap: QPixmap) -> None:
+        """Replace the displayed thumbnail pixmap."""
+        self._thumb_label.setPixmap(pixmap)
+
 
 
 
@@ -202,6 +295,15 @@ class GalleryPanel(QWidget):
         self._cb_image_selected: Optional[Callable[[str], None]] = None
         self._current_filename: Optional[str] = None
         self._populated_filenames: list[str] = []
+
+        # Live thumbnail update (FEATURE-020)
+        self._thumb_update_timer = QTimer(self)
+        self._thumb_update_timer.setSingleShot(True)
+        self._thumb_update_timer.setInterval(300)
+        self._thumb_update_timer.timeout.connect(self._regenerate_active_thumbnail)
+        self._pending_doc = None
+        self._pending_layer_configs: list = []
+        self._thumb_worker: Optional[_ThumbnailWorker] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -295,9 +397,54 @@ class GalleryPanel(QWidget):
         for item in self._items:
             item.set_selected(item._filename == filename)
 
+    def schedule_thumbnail_update(
+        self,
+        filename: Optional[str],
+        doc,               # ImageDocument
+        layer_configs: list,
+    ) -> None:
+        """Schedule a debounced regeneration of the active image thumbnail."""
+        if filename is None or doc is None:
+            return
+        self._current_filename = filename
+        self._pending_doc = doc
+        self._pending_layer_configs = layer_configs
+        self._thumb_update_timer.start()
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _regenerate_active_thumbnail(self) -> None:
+        """Launch a worker thread to regenerate the active thumbnail."""
+        if self._pending_doc is None or not self._current_filename:
+            return
+        # Stop any in-flight worker
+        if self._thumb_worker is not None and self._thumb_worker.isRunning():
+            self._thumb_worker.thumbnail_ready.disconnect()
+            self._thumb_worker.quit()
+            self._thumb_worker.wait()
+        worker = _ThumbnailWorker(
+            self._current_filename,
+            self._pending_doc,
+            self._pending_layer_configs,
+            _THUMB_SIZE,
+            parent=self,
+        )
+        worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+        self._thumb_worker = worker
+        worker.start()
+
+    def _on_thumbnail_ready(self, filename: str, pixmap: QPixmap) -> None:
+        """Update the matching thumbnail item in the UI (main thread)."""
+        # Invalidate cache entry so the disk-based loader picks up changes
+        for key in list(_thumb_cache.keys()):
+            if key[0] == os.path.join(self._images_dir, filename):
+                del _thumb_cache[key]
+        for item in self._items:
+            if item._filename == filename:
+                item.update_pixmap(pixmap)
+                break
 
     def _on_item_clicked(self, filename: str) -> None:
         self.set_current_filename(filename)

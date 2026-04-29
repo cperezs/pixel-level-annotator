@@ -332,6 +332,16 @@ class MainWindow(QMainWindow):
         controller.state.subscribe("session", _schedule_save)
         controller.state.subscribe("view", _schedule_save)
 
+        def _on_annotations_changed(_progress: int = 0):
+            if self._controller and self._controller.document:
+                self._gallery.schedule_thumbnail_update(
+                    self._controller.current_filename,
+                    self._controller.document,
+                    self._layer_configs,
+                )
+
+        controller.on_progress_changed(_on_annotations_changed)
+
     def _save_project_config(self) -> None:
         """Snapshot current state into ProjectConfig and save to disk."""
         if self._project_folder is None or self._project_config is None:
