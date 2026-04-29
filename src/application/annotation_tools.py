@@ -76,6 +76,78 @@ def shrink_mask(mask: np.ndarray) -> np.ndarray:
 # Compositing (for the viewer)
 # ------------------------------------------------------------------
 
+# ------------------------------------------------------------------
+# Fill tool
+# ------------------------------------------------------------------
+
+def compute_fill_mask(
+    annotations: np.ndarray,
+    active_layer: int,
+    click_x: int,
+    click_y: int,
+) -> np.ndarray:
+    """Compute a flood-fill mask starting from (click_x, click_y).
+
+    The fill expands through pixels that have the same label as the seed pixel.
+    A pixel's label is the index of its annotated layer (0..N-1), or -1 if
+    unannotated.  The fill stops at pixels with a different label or at the
+    image boundary.
+
+    Parameters
+    ----------
+    annotations : np.ndarray
+        Shape (N, H, W), dtype uint8, values 0 or 255.
+    active_layer : int
+        The layer to fill into.
+    click_x, click_y : int
+        Seed pixel in image coordinates (x = col, y = row).
+
+    Returns
+    -------
+    np.ndarray
+        Boolean or uint8 mask of shape (H, W) — 255 where the fill should
+        be applied.
+    """
+    h, w = annotations.shape[1], annotations.shape[2]
+
+    # Clamp seed to valid range
+    seed_x = max(0, min(w - 1, click_x))
+    seed_y = max(0, min(h - 1, click_y))
+
+    # Build a label map: -1 = unannotated, 0..N-1 = layer index
+    label_map = np.full((h, w), -1, dtype=np.int16)
+    for i in range(annotations.shape[0]):
+        label_map[annotations[i] > 0] = i
+
+    # Seed label: the label at the clicked pixel
+    seed_label = int(label_map[seed_y, seed_x])
+
+    # Create binary mask: True where same label as seed
+    same_label = (label_map == seed_label).astype(np.uint8)
+
+    # Flood-fill within same-label region using cv2.floodFill
+    # (operates on a copy with a 1-pixel border)
+    padded = np.zeros((h + 2, w + 2), dtype=np.uint8)
+    padded[1:h + 1, 1:w + 1] = same_label
+    fill_mask = np.zeros((h + 4, w + 4), dtype=np.uint8)  # cv2 requires this size
+
+    cv2.floodFill(
+        padded,
+        fill_mask,
+        (seed_x + 1, seed_y + 1),   # seed in padded coords
+        newVal=2,                    # mark visited pixels with 2
+        flags=cv2.FLOODFILL_FIXED_RANGE,
+    )
+
+    result = np.zeros((h, w), dtype=np.uint8)
+    result[padded[1:h + 1, 1:w + 1] == 2] = 255
+    return result
+
+
+# ------------------------------------------------------------------
+# Compositing (for the viewer)
+# ------------------------------------------------------------------
+
 def build_annotation_rgba(
     annotations: np.ndarray,
     layer_colors: list[tuple[int, int, int]],

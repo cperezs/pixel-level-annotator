@@ -29,6 +29,7 @@ from infrastructure.image_repository import ImageRepository
 from application.app_state import AppState, ToolbarState
 from application.annotation_tools import (
     compute_pen_mask,
+    compute_fill_mask,
     apply_overwrite_guard,
     smooth_mask,
     expand_mask,
@@ -859,8 +860,9 @@ class AnnotatorController:
     def _run_fill(self, px: int, py: int) -> None:
         doc = self._document
         layer = self._state.session.active_layer
-        connected = not self._state.tool.fill_all
-        mask = doc.get_unannotated_mask(px, py, connected=connected)
+        if layer in self._state.session.locked_layers:
+            return
+        mask = compute_fill_mask(doc.annotations, layer, px, py)
         if self._action_logger:
             self._action_logger.snapshot_before(doc.annotations)
         self._autolabel.begin_correction(doc.annotations)
