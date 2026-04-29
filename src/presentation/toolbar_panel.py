@@ -11,6 +11,7 @@ from typing import Callable, Optional
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -26,6 +27,7 @@ from domain.layer_config import LayerConfig
 from application.app_state import ToolbarState
 from presentation.style import (
     PRIMARY,
+    ON_PRIMARY,
     ON_SURFACE,
     ON_SURFACE_VARIANT,
     SURFACE_BRIGHT,
@@ -150,6 +152,8 @@ class ToolbarPanel(QWidget):
         self.setStyleSheet(f"background-color: {SURFACE_CONTAINER_HIGH};")
 
         self._cb_tool_selected: Optional[Callable[[str], None]] = None
+        self._cb_autolabel_plugin_changed: Optional[Callable] = None
+        self._cb_autolabel_configure: Optional[Callable] = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -181,7 +185,7 @@ class ToolbarPanel(QWidget):
         self._build_fill_group()
         self._build_erase_group()
         self._build_erase_all_button()
-        self._build_gallery_button()
+        self._build_autolabel_section()
         self._build_web_service_section()
         self._layout.addStretch()
 
@@ -236,8 +240,58 @@ class ToolbarPanel(QWidget):
     def on_erase_all_clicked(self, cb: Callable) -> None:
         self._q_erase_all_button.clicked.connect(cb)
 
-    def on_gallery_clicked(self, cb: Callable) -> None:
-        self._q_gallery_button.clicked.connect(cb)
+    def on_autolabel_run(self, cb: Callable) -> None:
+        self._q_autolabel_run_button.clicked.connect(cb)
+
+    def on_autolabel_configure(self, cb: Callable) -> None:
+        self._cb_autolabel_configure = cb
+
+    def on_autolabel_plugin_changed(self, cb: Callable) -> None:
+        self._cb_autolabel_plugin_changed = cb
+
+    def refresh_autolabel_plugins(self, plugins, initial_plugin_id: Optional[str] = None) -> None:
+        current_id = initial_plugin_id if initial_plugin_id is not None else self._q_autolabel_combo.currentData()
+        self._q_autolabel_combo.blockSignals(True)
+        self._q_autolabel_combo.clear()
+        self._q_autolabel_combo.addItem("--Select model--", None)
+        for plugin in plugins:
+            self._q_autolabel_combo.addItem(plugin.display_name, plugin.id)
+        restored = False
+        if current_id is not None:
+            for i in range(self._q_autolabel_combo.count()):
+                if self._q_autolabel_combo.itemData(i) == current_id:
+                    self._q_autolabel_combo.setCurrentIndex(i)
+                    restored = True
+                    break
+        if not restored:
+            self._q_autolabel_combo.setCurrentIndex(0)
+        self._q_autolabel_combo.blockSignals(False)
+        self._on_autolabel_combo_changed()
+
+    def get_selected_plugin_id(self) -> Optional[str]:
+        return self._q_autolabel_combo.currentData()
+
+    def set_selected_plugin(self, plugin_id: str) -> None:
+        for i in range(self._q_autolabel_combo.count()):
+            if self._q_autolabel_combo.itemData(i) == plugin_id:
+                self._q_autolabel_combo.setCurrentIndex(i)
+                return
+
+    def update_mapping_indicator(self, has_mapping: bool) -> None:
+        if has_mapping:
+            self._q_autolabel_configure_btn.setToolTip("Mapping configurado — haz clic para editar")
+            self._q_autolabel_configure_btn.setStyleSheet(
+                f"QPushButton {{ background: rgba(161,250,255,0.18); border: none; "
+                f"border-radius: 6px; color: {PRIMARY}; font-size: 14px; padding: 0; }}"
+                f"QPushButton:hover {{ background: rgba(161,250,255,0.32); }}"
+            )
+        else:
+            self._q_autolabel_configure_btn.setToolTip("Configurar correspondencia de capas")
+            self._q_autolabel_configure_btn.setStyleSheet(
+                f"QPushButton {{ background: transparent; border: none; "
+                f"border-radius: 6px; color: {ON_SURFACE_VARIANT}; font-size: 14px; padding: 0; }}"
+                f"QPushButton:hover {{ color: {ON_SURFACE}; background: rgba(255,255,255,0.07); }}"
+            )
 
     def on_web_service_mode_changed(self, cb: Callable[[bool], None]) -> None:
         self._q_web_service_mode.stateChanged.connect(
@@ -259,7 +313,7 @@ class ToolbarPanel(QWidget):
             "selector": self._q_selector_btn,
             "pen":      self._q_pen_btn,
             "fill":     self._q_fill_btn,
-            "erase":    self._q_erase_btn,
+            "eraser":    self._q_erase_btn,
         }
         for t, btn in mapping.items():
             btn.setChecked(t == tool)
@@ -385,8 +439,8 @@ class ToolbarPanel(QWidget):
 
     def _build_erase_group(self) -> None:
         card = _ToolCard()
-        self._q_erase_btn = _ToolButton("ERASE", "e")
-        self._q_erase_btn.clicked.connect(lambda: self._fire_tool("erase"))
+        self._q_erase_btn = _ToolButton("ERASER", "e")
+        self._q_erase_btn.clicked.connect(lambda: self._fire_tool("eraser"))
         card.card_layout.addWidget(self._q_erase_btn)
 
         row = QHBoxLayout()
@@ -459,6 +513,96 @@ class ToolbarPanel(QWidget):
         """)
         self._bottom_layout.insertWidget(0, self._q_gallery_button)
 
+    def _build_autolabel_section(self) -> None:
+        card = QFrame()
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: {SURFACE_CONTAINER_HIGHEST};
+                border-radius: 12px;
+                border: 1px solid rgba(72, 72, 72, 0.1);
+            }}
+        """)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(10)
+
+        # Header
+        header_row = QHBoxLayout()
+        icon = QLabel("⚡")
+        icon.setStyleSheet(f"font-size: 14px; color: {PRIMARY};")
+        title = QLabel("AI AUTO-LABELING")
+        title.setStyleSheet(
+            f"color: {PRIMARY}; font-size: {FONT_SIZE_XS}px; "
+            f"font-weight: 700; letter-spacing: 1.5px;"
+        )
+        header_row.addWidget(icon)
+        header_row.addWidget(title)
+        header_row.addStretch()
+        card_layout.addLayout(header_row)
+
+        # Model selector row: combo + configure button
+        combo_row = QHBoxLayout()
+        combo_row.setSpacing(6)
+
+        self._q_autolabel_combo = QComboBox()
+        self._q_autolabel_combo.addItem("--Select model--", None)
+        self._q_autolabel_combo.currentIndexChanged.connect(self._on_autolabel_combo_changed)
+        combo_row.addWidget(self._q_autolabel_combo, 1)
+
+        self._q_autolabel_configure_btn = QPushButton("⚙")
+        self._q_autolabel_configure_btn.setFixedSize(28, 28)
+        self._q_autolabel_configure_btn.setEnabled(False)
+        self._q_autolabel_configure_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._q_autolabel_configure_btn.setToolTip("Configurar correspondencia de capas")
+        self._q_autolabel_configure_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; "
+            f"border-radius: 6px; color: {ON_SURFACE_VARIANT}; font-size: 14px; padding: 0; }}"
+            f"QPushButton:hover {{ color: {ON_SURFACE}; background: rgba(255,255,255,0.07); }}"
+            f"QPushButton:disabled {{ color: {OUTLINE_VARIANT}; }}"
+        )
+        self._q_autolabel_configure_btn.clicked.connect(self._on_autolabel_configure_clicked)
+        combo_row.addWidget(self._q_autolabel_configure_btn)
+
+        card_layout.addLayout(combo_row)
+
+        # Run button
+        self._q_autolabel_run_button = QPushButton("RUN")
+        self._q_autolabel_run_button.setEnabled(False)
+        self._q_autolabel_run_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._q_autolabel_run_button.setMinimumHeight(36)
+        self._q_autolabel_run_button.setStyleSheet(f"""
+            QPushButton {{
+                background: {PRIMARY};
+                color: {ON_PRIMARY};
+                font-weight: 700;
+                border-radius: 8px;
+                font-size: {FONT_SIZE_SM}px;
+                letter-spacing: 2px;
+            }}
+            QPushButton:hover {{ background: #b5fcff; }}
+            QPushButton:pressed {{ background: #00e5ee; }}
+            QPushButton:disabled {{
+                background: {SURFACE_CONTAINER_HIGHEST};
+                color: {OUTLINE_VARIANT};
+            }}
+        """)
+        card_layout.addWidget(self._q_autolabel_run_button)
+
+        self._bottom_layout.addWidget(card)
+
+    def _on_autolabel_combo_changed(self) -> None:
+        plugin_id = self._q_autolabel_combo.currentData()
+        has_plugin = plugin_id is not None
+        self._q_autolabel_run_button.setEnabled(has_plugin)
+        self._q_autolabel_configure_btn.setEnabled(has_plugin)
+        if self._cb_autolabel_plugin_changed:
+            self._cb_autolabel_plugin_changed(plugin_id)
+
+    def _on_autolabel_configure_clicked(self) -> None:
+        plugin_id = self._q_autolabel_combo.currentData()
+        if plugin_id and self._cb_autolabel_configure:
+            self._cb_autolabel_configure(plugin_id)
+
     def _build_web_service_section(self) -> None:
         card = QFrame()
         card.setStyleSheet("""
@@ -522,7 +666,7 @@ class ToolbarPanel(QWidget):
             "selector": self._q_selector_btn,
             "pen":      self._q_pen_btn,
             "fill":     self._q_fill_btn,
-            "erase":    self._q_erase_btn,
+            "eraser":    self._q_erase_btn,
         }
         for t, btn in mapping.items():
             btn.set_active(t == tool)
@@ -534,7 +678,7 @@ class ToolbarPanel(QWidget):
     def _update_tool_widget_states(self, tool: str) -> None:
         pen_active      = tool == "pen"
         selector_active = tool == "selector"
-        erase_active    = tool == "erase"
+        erase_active    = tool == "eraser"
 
         self._q_pen_spin.setEnabled(pen_active)
         self._q_pen_slider.setEnabled(pen_active)

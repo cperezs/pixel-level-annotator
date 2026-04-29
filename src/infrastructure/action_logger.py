@@ -164,7 +164,7 @@ class ActionLogger:
         """Log a pen_stroke, erase_stroke, selector_commit, or fill_commit."""
         action_map = {
             "pen": "pen_stroke",
-            "erase": "erase_stroke",
+            "eraser": "erase_stroke",
             "selector": "selector_commit",
             "fill": "fill_commit",
         }

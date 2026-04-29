@@ -214,7 +214,7 @@ class MainWindow(QMainWindow):
 
         plugins = controller.autolabel_service.get_compatible_plugins()
         saved_plugin = self._project_config.selected_plugin_id if self._project_config else None
-        self._right_panel.refresh_autolabel_plugins(plugins, initial_plugin_id=saved_plugin)
+        self._toolbar.refresh_autolabel_plugins(plugins, initial_plugin_id=saved_plugin)
 
         # Load last image or first available
         if target and target not in filenames:
@@ -297,7 +297,6 @@ class MainWindow(QMainWindow):
         middle.setSpacing(0)
 
         middle.addWidget(self._toolbar, 0)
-        middle.addWidget(self._gallery, 0)
 
         canvas_wrapper = QWidget()
         canvas_wrapper.setStyleSheet(f"background-color: {SURFACE_CONTAINER_LOW};")
@@ -307,7 +306,9 @@ class MainWindow(QMainWindow):
         middle.addWidget(canvas_wrapper, 1)
         self._canvas_wrapper = canvas_wrapper
 
+        middle.addWidget(self._gallery, 0)
         middle.addWidget(self._right_panel, 0)
+
         root.addLayout(middle, 1)
 
         # Status bar
@@ -364,7 +365,7 @@ class MainWindow(QMainWindow):
         cfg.hidden_layers = list(s.session.hidden_layers)
         cfg.global_layer_opacity = s.view.global_layer_opacity
         cfg.last_image = self._controller.current_filename
-        cfg.selected_plugin_id = self._right_panel.get_selected_plugin_id()
+        cfg.selected_plugin_id = self._toolbar.get_selected_plugin_id()
         # Serialize plugin configs
         cfg.plugin_configs = {}
         for pid, pc in s.plugin_configs.items():
@@ -535,11 +536,13 @@ class MainWindow(QMainWindow):
         tb.on_threshold_changed(ctrl.set_selector_threshold)
         tb.on_auto_smooth_changed(ctrl.set_selector_auto_smooth)
         tb.on_fill_all_changed(ctrl.set_fill_all)
-        tb.on_gallery_clicked(self._toggle_gallery)
         tb.on_erase_all_clicked(self._on_erase_all)
         tb.on_web_service_mode_changed(self._toggle_web_service_mode)
         tb.on_submit_annotations(self._cb_submit_annotations)
         tb.on_cancel_annotations(self._cb_cancel_annotations)
+        tb.on_autolabel_run(self._cb_run_autolabel)
+        tb.on_autolabel_configure(self._cb_configure_autolabel)
+        tb.on_autolabel_plugin_changed(self._cb_autolabel_plugin_changed)
 
         # Top bar buttons
         self._q_undo_btn.clicked.connect(ctrl.undo)
@@ -561,10 +564,8 @@ class MainWindow(QMainWindow):
         rp.on_show_missing_pixels_changed(ctrl.toggle_show_missing_pixels)
         rp.on_show_grid_changed(ctrl.toggle_show_grid)
         rp.on_layer_lock_toggled(ctrl.toggle_layer_lock)
-        rp.on_autolabel_run(self._cb_run_autolabel)
-        rp.on_autolabel_configure(self._cb_configure_autolabel)
-        rp.on_autolabel_plugin_changed(self._cb_autolabel_plugin_changed)
         rp.on_open_project(self._ask_open_project)
+        rp.on_gallery_clicked(self._toggle_gallery)
         rp.on_opacity_changed(ctrl.set_global_layer_opacity)
 
     def _wire_gallery(self) -> None:
@@ -680,7 +681,7 @@ class MainWindow(QMainWindow):
             self._current_web_request = None
 
     def _cb_run_autolabel(self) -> None:
-        plugin_id = self._right_panel.get_selected_plugin_id()
+        plugin_id = self._toolbar.get_selected_plugin_id()
         if not plugin_id:
             return
 
@@ -747,7 +748,7 @@ class MainWindow(QMainWindow):
                 conflict_strategy=cfg["conflict_strategy"],
                 layer_priorities=cfg["layer_priorities"],
             )
-            self._right_panel.update_mapping_indicator(has_mapping=True)
+            self._toolbar.update_mapping_indicator(has_mapping=True)
             self._save_project_config()
 
     def _cb_autolabel_plugin_changed(self, plugin_id: Optional[str]) -> None:
@@ -774,7 +775,7 @@ class MainWindow(QMainWindow):
         has_mapping = bool(
             plugin_id and plugin_id in self._controller.state.plugin_configs
         )
-        self._right_panel.update_mapping_indicator(has_mapping)
+        self._toolbar.update_mapping_indicator(has_mapping)
         self._save_project_config()
 
     def _on_autolabel_finished(self, error) -> None:
@@ -784,7 +785,7 @@ class MainWindow(QMainWindow):
         else:
             self._controller.finalize_autolabel()
             plugins = self._controller.autolabel_service.get_compatible_plugins()
-            self._right_panel.refresh_autolabel_plugins(plugins)
+            self._toolbar.refresh_autolabel_plugins(plugins)
         # FEATURE-018: return keyboard focus to the canvas after the model finishes.
         if hasattr(self, "_viewer"):
             QTimer.singleShot(0, self._viewer.setFocus)

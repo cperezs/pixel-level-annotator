@@ -61,7 +61,7 @@ class PluginConfig:
 @dataclass
 class ToolState:
     """Settings for the currently active annotation tool."""
-    active: str = "selector"              # "pen" | "selector" | "fill" | "erase"
+    active: str = "selector"              # "pen" | "selector" | "fill" | "eraser"
     pen_size: int = 5
     eraser_size: int = 5
     selector_threshold: int = 32

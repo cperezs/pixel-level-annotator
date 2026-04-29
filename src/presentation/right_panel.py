@@ -1,4 +1,4 @@
-"""Right sidebar panel — Workspace: layers, view options, autolabeling.
+"""Right sidebar panel — Workspace: layers, view options.
 
 Provides layer management (selection, visibility toggle, lock toggle),
 view options (show image, show other layers, show missing pixels), and
@@ -565,8 +565,6 @@ class RightPanel(QWidget):
         self.setStyleSheet(f"background-color: {SURFACE_CONTAINER_HIGH};")
 
         self._cb_layer_selected: Optional[Callable[[int], None]] = None
-        self._cb_autolabel_plugin_changed: Optional[Callable[[Optional[str]], None]] = None
-        self._cb_autolabel_configure: Optional[Callable[[str], None]] = None
         self._cb_open_project: Optional[Callable[[], None]] = None
 
         outer = QVBoxLayout(self)
@@ -591,18 +589,9 @@ class RightPanel(QWidget):
         outer.addWidget(scroll, 1)
         self._scroll_area = scroll
 
-        # Sticky bottom area for autolabeling
-        self._bottom_widget = QWidget()
-        self._bottom_widget.setStyleSheet(f"background-color: {SURFACE_CONTAINER_HIGH};")
-        self._bottom_layout = QVBoxLayout(self._bottom_widget)
-        self._bottom_layout.setContentsMargins(14, 8, 14, 12)
-        self._bottom_layout.setSpacing(8)
-        outer.addWidget(self._bottom_widget, 0)
-
         self._build_layers_section(layer_configs)
         self._build_opacity_section()
         self._build_view_options()
-        self._build_autolabel_section()
         self._layout.addStretch()
 
         # Nothing to interact with until an image is loaded
@@ -615,10 +604,12 @@ class RightPanel(QWidget):
     def set_image_loaded(self, loaded: bool) -> None:
         """Enable or disable everything below the project header."""
         self._scroll_area.setEnabled(loaded)
-        self._bottom_widget.setEnabled(loaded)
 
     def on_layer_selected(self, cb: Callable[[int], None]) -> None:
         self._cb_layer_selected = cb
+
+    def on_gallery_clicked(self, cb: Callable[[], None]) -> None:
+        self._cb_gallery_toggle = cb
 
     def on_open_project(self, cb: Callable[[], None]) -> None:
         self._cb_open_project = cb
@@ -648,18 +639,6 @@ class RightPanel(QWidget):
 
     def on_opacity_changed(self, cb: Callable[[float], None]) -> None:
         self._cb_opacity_changed = cb
-
-    def on_autolabel_run(self, cb: Callable) -> None:
-        self._q_autolabel_run_button.clicked.connect(cb)
-
-    def on_autolabel_configure(self, cb: Callable[[str], None]) -> None:
-        """Register *cb* to be called with the selected plugin_id when the
-        configure button is clicked."""
-        self._cb_autolabel_configure = cb
-
-    def on_autolabel_plugin_changed(self, cb: Callable[[Optional[str]], None]) -> None:
-        """Register *cb* to be called with the plugin_id whenever the combo changes."""
-        self._cb_autolabel_plugin_changed = cb
 
     # ------------------------------------------------------------------
     # State updates
@@ -698,55 +677,6 @@ class RightPanel(QWidget):
     def set_project_name(self, name: str) -> None:
         """Update the displayed project name."""
         self._project_name_label.setText(name or "—")
-
-    def refresh_autolabel_plugins(self, plugins, initial_plugin_id: Optional[str] = None) -> None:
-        # Use the explicit initial_plugin_id if provided, else preserve the current selection.
-        current_id = initial_plugin_id if initial_plugin_id is not None else self._q_autolabel_combo.currentData()
-        self._q_autolabel_combo.blockSignals(True)
-        self._q_autolabel_combo.clear()
-        self._q_autolabel_combo.addItem("--Select model--", None)
-        for plugin in plugins:
-            self._q_autolabel_combo.addItem(plugin.display_name, plugin.id)
-        # Try to restore previous selection
-        restored = False
-        if current_id is not None:
-            for i in range(self._q_autolabel_combo.count()):
-                if self._q_autolabel_combo.itemData(i) == current_id:
-                    self._q_autolabel_combo.setCurrentIndex(i)
-                    restored = True
-                    break
-        if not restored:
-            self._q_autolabel_combo.setCurrentIndex(0)
-        self._q_autolabel_combo.blockSignals(False)
-        # Sync button states and fire the plugin-changed callback
-        self._on_autolabel_combo_changed()
-
-    def get_selected_plugin_id(self) -> Optional[str]:
-        return self._q_autolabel_combo.currentData()
-
-    def set_selected_plugin(self, plugin_id: str) -> None:
-        """Select the combo item matching *plugin_id*, if present."""
-        for i in range(self._q_autolabel_combo.count()):
-            if self._q_autolabel_combo.itemData(i) == plugin_id:
-                self._q_autolabel_combo.setCurrentIndex(i)
-                return
-
-    def update_mapping_indicator(self, has_mapping: bool) -> None:
-        """Update the configure button appearance when a mapping is saved/cleared."""
-        if has_mapping:
-            self._q_autolabel_configure_btn.setToolTip("Mapping configurado — haz clic para editar")
-            self._q_autolabel_configure_btn.setStyleSheet(
-                f"QPushButton {{ background: rgba(161,250,255,0.18); border: none; "
-                f"border-radius: 6px; color: {PRIMARY}; font-size: 14px; padding: 0; }}"
-                f"QPushButton:hover {{ background: rgba(161,250,255,0.32); }}"
-            )
-        else:
-            self._q_autolabel_configure_btn.setToolTip("Configurar correspondencia de capas")
-            self._q_autolabel_configure_btn.setStyleSheet(
-                f"QPushButton {{ background: transparent; border: none; "
-                f"border-radius: 6px; color: {ON_SURFACE_VARIANT}; font-size: 14px; padding: 0; }}"
-                f"QPushButton:hover {{ color: {ON_SURFACE}; background: rgba(255,255,255,0.07); }}"
-            )
 
     # ------------------------------------------------------------------
     # Widget construction
@@ -798,6 +728,24 @@ class RightPanel(QWidget):
             f"border: none; padding-bottom: 2px;"
         )
         outer.addWidget(self._project_name_label)
+
+        # Gallery toggle button
+        self._cb_gallery_toggle: Optional[Callable[[], None]] = None
+        gallery_btn = QPushButton("\U0001f5bc  Gallery")
+        gallery_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        gallery_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        gallery_btn.setFixedHeight(28)
+        gallery_btn.setToolTip("Show / hide image gallery")
+        gallery_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; "
+            f"border-radius: 6px; color: {ON_SURFACE_VARIANT}; "
+            f"font-size: {FONT_SIZE_SM}px; font-weight: 600; "
+            f"text-align: left; padding: 0 4px; }}"
+            f"QPushButton:hover {{ background: rgba(161,250,255,0.1); color: {PRIMARY}; }}"
+        )
+        gallery_btn.clicked.connect(lambda: self._cb_gallery_toggle and self._cb_gallery_toggle())
+        self._q_gallery_btn = gallery_btn
+        outer.addWidget(gallery_btn)
 
     def _on_open_project_clicked(self) -> None:
         if self._cb_open_project:
@@ -954,83 +902,6 @@ class RightPanel(QWidget):
         self._q_show_grid.clicked.connect(self._toggle_show_grid)
         self._layout.addWidget(self._q_show_grid)
 
-    def _build_autolabel_section(self) -> None:
-        card = QFrame()
-        card.setStyleSheet(f"""
-            QFrame {{
-                background-color: {SURFACE_CONTAINER_HIGHEST};
-                border-radius: 12px;
-                border: 1px solid rgba(72, 72, 72, 0.1);
-            }}
-        """)
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(14, 12, 14, 12)
-        card_layout.setSpacing(10)
-
-        # Header
-        header_row = QHBoxLayout()
-        icon = QLabel("⚡")
-        icon.setStyleSheet(f"font-size: 14px; color: {PRIMARY};")
-        title = QLabel("AI AUTO-LABELING")
-        title.setStyleSheet(
-            f"color: {PRIMARY}; font-size: {FONT_SIZE_XS}px; "
-            f"font-weight: 700; letter-spacing: 1.5px;"
-        )
-        header_row.addWidget(icon)
-        header_row.addWidget(title)
-        header_row.addStretch()
-        card_layout.addLayout(header_row)
-
-        # Model selector row: combo + configure button
-        combo_row = QHBoxLayout()
-        combo_row.setSpacing(6)
-
-        self._q_autolabel_combo = QComboBox()
-        self._q_autolabel_combo.addItem("--Select model--", None)
-        self._q_autolabel_combo.currentIndexChanged.connect(self._on_autolabel_combo_changed)
-        combo_row.addWidget(self._q_autolabel_combo, 1)
-
-        self._q_autolabel_configure_btn = QPushButton("⚙")
-        self._q_autolabel_configure_btn.setFixedSize(28, 28)
-        self._q_autolabel_configure_btn.setEnabled(False)
-        self._q_autolabel_configure_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._q_autolabel_configure_btn.setToolTip("Configurar correspondencia de capas")
-        self._q_autolabel_configure_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; border: none; "
-            f"border-radius: 6px; color: {ON_SURFACE_VARIANT}; font-size: 14px; padding: 0; }}"
-            f"QPushButton:hover {{ color: {ON_SURFACE}; background: rgba(255,255,255,0.07); }}"
-            f"QPushButton:disabled {{ color: {OUTLINE_VARIANT}; }}"
-        )
-        self._q_autolabel_configure_btn.clicked.connect(self._on_configure_clicked)
-        combo_row.addWidget(self._q_autolabel_configure_btn)
-
-        card_layout.addLayout(combo_row)
-
-        # Run button
-        self._q_autolabel_run_button = QPushButton("RUN")
-        self._q_autolabel_run_button.setEnabled(False)
-        self._q_autolabel_run_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._q_autolabel_run_button.setMinimumHeight(36)
-        self._q_autolabel_run_button.setStyleSheet(f"""
-            QPushButton {{
-                background: {PRIMARY};
-                color: {ON_PRIMARY};
-                font-weight: 700;
-                border-radius: 8px;
-                font-size: {FONT_SIZE_SM}px;
-                letter-spacing: 2px;
-            }}
-            QPushButton:hover {{ background: #b5fcff; }}
-            QPushButton:pressed {{ background: #00e5ee; }}
-            QPushButton:disabled {{
-                background: {SURFACE_CONTAINER_HIGHEST};
-                color: {OUTLINE_VARIANT};
-            }}
-        """)
-        card_layout.addWidget(self._q_autolabel_run_button)
-
-        self._bottom_layout.addWidget(card)
-
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -1048,19 +919,6 @@ class RightPanel(QWidget):
     def _on_toggle_all_lock_clicked(self) -> None:
         if self._cb_toggle_all_lock:
             self._cb_toggle_all_lock()
-
-    def _on_autolabel_combo_changed(self) -> None:
-        plugin_id = self._q_autolabel_combo.currentData()
-        has_plugin = plugin_id is not None
-        self._q_autolabel_run_button.setEnabled(has_plugin)
-        self._q_autolabel_configure_btn.setEnabled(has_plugin)
-        if self._cb_autolabel_plugin_changed:
-            self._cb_autolabel_plugin_changed(plugin_id)
-
-    def _on_configure_clicked(self) -> None:
-        plugin_id = self._q_autolabel_combo.currentData()
-        if plugin_id and self._cb_autolabel_configure:
-            self._cb_autolabel_configure(plugin_id)
 
     def _create_toggle_button(self, text: str, active: bool) -> QPushButton:
         btn = QPushButton(text)

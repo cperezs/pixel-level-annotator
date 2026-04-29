@@ -253,7 +253,7 @@ class AnnotatorController:
     # ------------------------------------------------------------------
 
     def select_tool(self, tool: str) -> None:
-        """Switch the active annotation tool (``"pen"``, ``"selector"``, ``"fill"``, ``"erase"``)."""
+        """Switch the active annotation tool (``"pen"``, ``"selector"``, ``"fill"``, ``"eraser"``)."""
         self._state.tool.active = tool
         self._state.tool.is_drawing = False
         self._state.session.selection_mask = None
@@ -284,7 +284,7 @@ class AnnotatorController:
             )
 
     def set_pen_size(self, size: int) -> None:
-        self._state.tool.pen_size = max(1, size)
+        self._state.tool.pen_size = max(1, min(50, size))
         self._state.notify("tool")
         # Refresh the cursor preview circle at the current mouse position
         # so the user sees the new size immediately without moving the mouse.
@@ -324,10 +324,10 @@ class AnnotatorController:
         self._state.notify("tool")
 
     def set_eraser_size(self, size: int) -> None:
-        self._state.tool.eraser_size = max(1, size)
+        self._state.tool.eraser_size = max(1, min(50, size))
         self._state.notify("tool")
         if (
-            self._state.tool.active == "erase"
+            self._state.tool.active == "eraser"
             and not self._state.tool.is_drawing
             and self._last_mouse_pos is not None
             and self._document is not None
@@ -636,12 +636,12 @@ class AnnotatorController:
             return
         tool = self._state.tool
         layer = self._state.session.active_layer
-        if tool.active != "erase" and layer in self._state.session.locked_layers:
+        if tool.active != "eraser" and layer in self._state.session.locked_layers:
             return
         if tool.active == "pen":
             self._pen_draw(px, py)
             tool.is_drawing = True
-        elif tool.active == "erase":
+        elif tool.active == "eraser":
             self._erase_draw(px, py)
             tool.is_drawing = True
         elif tool.active == "selector":
@@ -657,7 +657,7 @@ class AnnotatorController:
         if self._state.tool.active == "pen" and self._state.tool.is_drawing:
             self._commit_annotation()
             self._state.tool.is_drawing = False
-        elif self._state.tool.active == "erase" and self._state.tool.is_drawing:
+        elif self._state.tool.active == "eraser" and self._state.tool.is_drawing:
             self._commit_erase()
             self._state.tool.is_drawing = False
 
@@ -677,10 +677,10 @@ class AnnotatorController:
                 self._document.height, self._document.width, px, py, tool.pen_size
             )
             self._viewer.set_tool_preview(preview, color)
-        elif tool.active == "erase" and tool.is_drawing:
+        elif tool.active == "eraser" and tool.is_drawing:
             self._viewer.set_tool_preview(None, (200, 200, 200))
             self._erase_draw(px, py)
-        elif tool.active == "erase":
+        elif tool.active == "eraser":
             preview = compute_pen_mask(
                 self._document.height, self._document.width, px, py, tool.eraser_size
             )
@@ -746,7 +746,7 @@ class AnnotatorController:
         elif key == "Plus":
             if tool.active == "pen":
                 self.set_pen_size(tool.pen_size + 1)
-            elif tool.active == "erase":
+            elif tool.active == "eraser":
                 self.set_eraser_size(tool.eraser_size + 1)
             elif tool.active == "selector" and tool.is_drawing:
                 mask = self._state.session.selection_mask
@@ -766,7 +766,7 @@ class AnnotatorController:
         elif key == "Minus":
             if tool.active == "pen":
                 self.set_pen_size(tool.pen_size - 1)
-            elif tool.active == "erase":
+            elif tool.active == "eraser":
                 self.set_eraser_size(tool.eraser_size - 1)
             elif tool.active == "selector" and tool.is_drawing:
                 mask = self._state.session.selection_mask
@@ -796,7 +796,7 @@ class AnnotatorController:
                 self._sync_selection_mask()
 
         elif key == "E":
-            self.select_tool("erase")
+            self.select_tool("eraser")
 
         elif key == "R" and tool.active == "selector" and tool.is_drawing:
             mask = self._state.session.selection_mask
@@ -905,7 +905,7 @@ class AnnotatorController:
         doc.erase_mask_unlocked(mask, locked)
         self._state.session.selection_mask = None
         self._sync_selection_mask()
-        self._post_annotation_commit(layer, tool="erase")
+        self._post_annotation_commit(layer, tool="eraser")
 
     def _commit_annotation(self) -> None:
         mask = self._state.session.selection_mask
