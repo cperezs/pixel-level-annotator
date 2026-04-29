@@ -686,7 +686,6 @@ class MainWindow(QMainWindow):
         self._controller.load_image(filename)
         self._gallery.set_current_filename(filename)
         self._update_status()
-        self._save_project_config()
 
     # ------------------------------------------------------------------
     # Toolbar action handlers
@@ -793,11 +792,13 @@ class MainWindow(QMainWindow):
                         layer_mapping=auto_mapping,
                     )
 
+        if self._project_folder is None:
+            return
         has_mapping = bool(
             plugin_id and plugin_id in self._controller.state.plugin_configs
         )
         self._toolbar.update_mapping_indicator(has_mapping)
-        self._save_project_config()
+        self._save_timer.start()
 
     def _on_autolabel_finished(self, error) -> None:
         self._hide_busy_overlay()

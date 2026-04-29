@@ -180,10 +180,10 @@ class ToolbarPanel(QWidget):
         outer.addWidget(self._bottom_widget, 0)
 
         self._build_header()
-        self._build_selector_group()
         self._build_pen_group()
-        self._build_fill_group()
         self._build_erase_group()
+        self._build_selector_group()
+        self._build_fill_group()
         self._build_erase_all_button()
         self._build_autolabel_section()
         self._build_web_service_section()
