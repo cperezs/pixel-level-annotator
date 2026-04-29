@@ -12,6 +12,37 @@ import numpy as np
 
 
 # ------------------------------------------------------------------
+# Interpolation
+# ------------------------------------------------------------------
+
+def interpolate_points(
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
+    step: int,
+) -> list[tuple[int, int]]:
+    """Return evenly-spaced points along the segment from (x0, y0) to (x1, y1).
+
+    The first point returned is always (x0, y0) and the last is always
+    (x1, y1).  Intermediate points are placed every *step* pixels along
+    the segment.  This prevents visible gaps in fast brush strokes.
+    """
+    dx = x1 - x0
+    dy = y1 - y0
+    dist = (dx * dx + dy * dy) ** 0.5
+    if dist == 0 or step <= 0:
+        return [(x1, y1)]
+    n = max(1, int(dist / step))
+    points: list[tuple[int, int]] = []
+    for i in range(n):
+        t = i / n
+        points.append((int(x0 + t * dx), int(y0 + t * dy)))
+    points.append((x1, y1))
+    return points
+
+
+# ------------------------------------------------------------------
 # Pen tool
 # ------------------------------------------------------------------
 

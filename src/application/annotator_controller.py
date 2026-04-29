@@ -35,6 +35,7 @@ from application.annotation_tools import (
     expand_mask,
     shrink_mask,
     build_annotation_rgba,
+    interpolate_points,
 )
 from application.autolabel_service import AutolabelService
 from viewer.interface import IImageAnnotationViewer
@@ -662,24 +663,46 @@ class AnnotatorController:
             self._state.tool.is_drawing = False
 
     def _handle_mouse_move(self, px: int, py: int) -> None:
-        self._last_mouse_pos = (px, py)
         if not self._document:
+            self._last_mouse_pos = (px, py)
             return
         tool = self._state.tool
         layer = self._state.session.active_layer
         color = self._layer_configs[layer].color_rgb
 
         if tool.active == "pen" and tool.is_drawing:
-            self._viewer.set_tool_preview(None, color)
-            self._pen_draw(px, py)
+            # FEATURE-031: interpolate to avoid gaps on fast moves
+            if self._last_mouse_pos is not None:
+                lx, ly = self._last_mouse_pos
+                step = max(1, tool.pen_size // 2)
+                for ix, iy in interpolate_points(lx, ly, px, py, step):
+                    self._pen_draw(ix, iy)
+            else:
+                self._pen_draw(px, py)
+            # FEATURE-037: keep cursor circle visible while drawing
+            preview = compute_pen_mask(
+                self._document.height, self._document.width, px, py, tool.pen_size
+            )
+            self._viewer.set_tool_preview(preview, color)
         elif tool.active == "pen":
             preview = compute_pen_mask(
                 self._document.height, self._document.width, px, py, tool.pen_size
             )
             self._viewer.set_tool_preview(preview, color)
         elif tool.active == "eraser" and tool.is_drawing:
-            self._viewer.set_tool_preview(None, (200, 200, 200))
-            self._erase_draw(px, py)
+            # FEATURE-031: interpolate to avoid gaps on fast moves
+            if self._last_mouse_pos is not None:
+                lx, ly = self._last_mouse_pos
+                step = max(1, tool.eraser_size // 2)
+                for ix, iy in interpolate_points(lx, ly, px, py, step):
+                    self._erase_draw(ix, iy)
+            else:
+                self._erase_draw(px, py)
+            # FEATURE-037: keep cursor circle visible while drawing
+            preview = compute_pen_mask(
+                self._document.height, self._document.width, px, py, tool.eraser_size
+            )
+            self._viewer.set_tool_preview(preview, (200, 200, 200))
         elif tool.active == "eraser":
             preview = compute_pen_mask(
                 self._document.height, self._document.width, px, py, tool.eraser_size
@@ -690,6 +713,7 @@ class AnnotatorController:
                 self._document.height, self._document.width, px, py, 1
             )
             self._viewer.set_tool_preview(preview, color)
+        self._last_mouse_pos = (px, py)
         self._notify_status()
 
     def _handle_scroll(
