@@ -191,16 +191,4 @@ class IImageAnnotationViewer(ABC):
         ``"shift"``, ``"alt"``).
         """
 
-    @abstractmethod
-    def register_key_press(
-        self,
-        cb: Callable[[str, frozenset], None],
-    ) -> None:
-        """Register *cb(key_name, modifiers)* for key-press events."""
 
-    @abstractmethod
-    def register_key_release(
-        self,
-        cb: Callable[[str, frozenset], None],
-    ) -> None:
-        """Register *cb(key_name, modifiers)* for key-release events."""

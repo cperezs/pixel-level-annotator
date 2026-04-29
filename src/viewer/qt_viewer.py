@@ -104,8 +104,6 @@ class QtImageAnnotationViewer(QWidget):
         self._cb_mouse_release: list[Callable] = []
         self._cb_mouse_move:    list[Callable] = []
         self._cb_scroll:        list[Callable] = []
-        self._cb_key_press:     list[Callable] = []
-        self._cb_key_release:   list[Callable] = []
 
         # Wire Qt input events to our handlers.
         self._view.mousePressEvent   = self._on_mouse_press
@@ -114,6 +112,8 @@ class QtImageAnnotationViewer(QWidget):
         self._view.wheelEvent        = self._on_wheel
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Prevent the inner graphics view from stealing keyboard focus.
+        self._view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         # Pinch-to-zoom state
         self._pinch_accum: float = 0.0
@@ -332,12 +332,6 @@ class QtImageAnnotationViewer(QWidget):
     def register_scroll(self, cb: Callable) -> None:
         self._cb_scroll.append(cb)
 
-    def register_key_press(self, cb: Callable[[str, frozenset], None]) -> None:
-        self._cb_key_press.append(cb)
-
-    def register_key_release(self, cb: Callable[[str, frozenset], None]) -> None:
-        self._cb_key_release.append(cb)
-
     # ------------------------------------------------------------------
     # Qt event handlers — translate to semantic callbacks
     # ------------------------------------------------------------------
@@ -438,18 +432,6 @@ class QtImageAnnotationViewer(QWidget):
             self._view.horizontalScrollBar().setValue(
                 self._view.horizontalScrollBar().value() - dx
             )
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802
-        key = _key_name(event.key())
-        mods = _modifiers_frozenset(event.modifiers())
-        for cb in self._cb_key_press:
-            cb(key, mods)
-
-    def keyReleaseEvent(self, event) -> None:  # noqa: N802
-        key = _key_name(event.key())
-        mods = _modifiers_frozenset(event.modifiers())
-        for cb in self._cb_key_release:
-            cb(key, mods)
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -133,20 +133,6 @@ class ShortcutManager(QObject):
             mods.add("alt")
         mods_fs = frozenset(mods)
 
-        # Keys always handled by ShortcutManager regardless of which widget
-        # has focus (the viewer included).
-        is_manager_key = (
-            key_name in ("V", "L", "H")
-            or (key_name in _DIGITS and ("ctrl" in mods_fs or "alt" in mods_fs))
-            or (t == QEvent.Type.KeyRelease and key_name in self._consumed_digits)
-        )
-
-        # When the viewer has focus it handles most keys via its own
-        # keyPressEvent → avoid double-handling for non-manager keys.
-        if hasattr(self._window, "_viewer") and focused is self._window._viewer:
-            if not is_manager_key:
-                return False
-
         if t == QEvent.Type.KeyPress:
             return self._handle_press(key_name, mods_fs)
         else:

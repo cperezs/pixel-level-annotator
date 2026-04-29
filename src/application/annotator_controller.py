@@ -94,8 +94,6 @@ class AnnotatorController:
         viewer.register_mouse_release(self._handle_mouse_release)
         viewer.register_mouse_move(self._handle_mouse_move)
         viewer.register_scroll(self._handle_scroll)
-        viewer.register_key_press(self.handle_key_press)
-        viewer.register_key_release(self.handle_key_release)
 
     # ------------------------------------------------------------------
     # Public read-only API for the presentation layer

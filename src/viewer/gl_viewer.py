@@ -868,8 +868,6 @@ class GLImageAnnotationViewer(QWidget):
         self._cb_mouse_release: list[Callable] = []
         self._cb_mouse_move:    list[Callable] = []
         self._cb_scroll:        list[Callable] = []
-        self._cb_key_press:     list[Callable] = []
-        self._cb_key_release:   list[Callable] = []
 
         # Pinch-to-zoom state
         self._pinch_accum: float = 0.0
@@ -886,6 +884,9 @@ class GLImageAnnotationViewer(QWidget):
         self._canvas.wheelEvent        = self._on_wheel
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Prevent the inner GL canvas from stealing keyboard focus; all key
+        # events must flow through the container so ShortcutManager sees them.
+        self._canvas.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self._gesture_filter = _GestureFilter(self._on_native_gesture, self)
         self._canvas.installEventFilter(self._gesture_filter)
@@ -1073,12 +1074,6 @@ class GLImageAnnotationViewer(QWidget):
     def register_scroll(self, cb: Callable) -> None:
         self._cb_scroll.append(cb)
 
-    def register_key_press(self, cb: Callable[[str, frozenset], None]) -> None:
-        self._cb_key_press.append(cb)
-
-    def register_key_release(self, cb: Callable[[str, frozenset], None]) -> None:
-        self._cb_key_release.append(cb)
-
     # ── Qt event handlers ────────────────────────────────────────────────
 
     def _on_mouse_press(self, event: QMouseEvent) -> None:
@@ -1173,18 +1168,6 @@ class GLImageAnnotationViewer(QWidget):
         for _ in range(abs(steps)):
             for cb in self._cb_scroll:
                 cb(dy, 0, px, py, frozenset({"ctrl"}))
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802
-        key = _key_name(event.key())
-        mods = _modifiers_frozenset(event.modifiers())
-        for cb in self._cb_key_press:
-            cb(key, mods)
-
-    def keyReleaseEvent(self, event) -> None:  # noqa: N802
-        key = _key_name(event.key())
-        mods = _modifiers_frozenset(event.modifiers())
-        for cb in self._cb_key_release:
-            cb(key, mods)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._canvas.cleanup()

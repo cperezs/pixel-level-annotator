@@ -892,6 +892,13 @@ class MainWindow(QMainWindow):
             if w is self._toolbar or w is self._right_panel:
                 QTimer.singleShot(0, self._viewer.setFocus)
                 return
+            # Also redirect if focus lands on the viewer's internal canvas
+            # widget (e.g. QOpenGLWidget or QGraphicsView child) rather than
+            # the viewer container itself.
+            if w is getattr(self._viewer, '_canvas', None) or \
+               w is getattr(self._viewer, '_view', None):
+                QTimer.singleShot(0, self._viewer.setFocus)
+                return
             w = w.parent()
 
     # ------------------------------------------------------------------
