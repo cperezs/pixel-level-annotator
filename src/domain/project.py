@@ -39,6 +39,7 @@ class ProjectConfig:
     locked_layers: list[int] = field(default_factory=list)
     hidden_layers: list[int] = field(default_factory=list)
     last_image: Optional[str] = None
+    active_tool: str = "selector"
 
     # Last selected AI model plugin id
     selected_plugin_id: Optional[str] = None

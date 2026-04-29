@@ -267,6 +267,7 @@ class MainWindow(QMainWindow):
         s.view.show_other_layers = cfg.show_other_layers
         s.view.show_missing_pixels = cfg.show_missing_pixels
         s.view.show_grid = cfg.show_grid
+        s.tool.active = cfg.active_tool
         s.session.active_layer = cfg.active_layer
         s.session.locked_layers = set(cfg.locked_layers)
         s.session.hidden_layers = set(cfg.hidden_layers)
@@ -377,6 +378,7 @@ class MainWindow(QMainWindow):
         cfg.hidden_layers = list(s.session.hidden_layers)
         cfg.global_layer_opacity = s.view.global_layer_opacity
         cfg.last_image = self._controller.current_filename
+        cfg.active_tool = self._controller.state.tool.active
         cfg.selected_plugin_id = self._toolbar.get_selected_plugin_id()
         # Serialize plugin configs
         cfg.plugin_configs = {}

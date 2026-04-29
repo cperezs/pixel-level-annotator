@@ -99,6 +99,7 @@ class ProjectManager:
             config.locked_layers = data.get("locked_layers", config.locked_layers)
             config.hidden_layers = data.get("hidden_layers", config.hidden_layers)
             config.last_image = data.get("last_image", config.last_image)
+            config.active_tool = data.get("active_tool", config.active_tool)
             config.selected_plugin_id = data.get("selected_plugin_id", config.selected_plugin_id)
             config.plugin_configs = data.get("plugin_configs", config.plugin_configs)
             config.global_layer_opacity = data.get("global_layer_opacity", config.global_layer_opacity)
