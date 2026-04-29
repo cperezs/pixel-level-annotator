@@ -182,4 +182,4 @@ class ShortcutManager(QObject):
             return True
 
         self._controller.handle_key_release(key_name, mods)
-        return False
+        return True
