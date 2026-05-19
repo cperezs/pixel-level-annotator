@@ -46,7 +46,7 @@ class WelcomeScreen(QWidget):
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(icon)
 
-        title = QLabel("PixelLabeler")
+        title = QLabel("PixelSmart")
         title.setStyleSheet(
             f"color: {PRIMARY}; font-size: 20px; font-weight: 700; "
             f"letter-spacing: -0.5px; background: transparent;"

@@ -1,7 +1,7 @@
 """Project model — represents an opened project folder.
 
 A project is a folder that the user has opened.  It stores its own
-configuration file (``.pixellabeler/project.toml``) with all the
+configuration file (``.pixelsmart/project.toml``) with all the
 application settings relevant to that project.
 """
 from __future__ import annotations
@@ -49,3 +49,6 @@ class ProjectConfig:
 
     # Global annotation layer opacity multiplier (0.0–1.0)
     global_layer_opacity: float = 0.7
+
+    # UI panel visibility
+    show_stats_panel: bool = False

@@ -25,6 +25,8 @@ is selected (argmax), guaranteeing full-image coverage with no conflicts.
 
 import os
 import logging
+import shutil
+import time
 
 import cv2
 import numpy as np
@@ -167,6 +169,7 @@ class OnnxTiledPlugin(AutolabelPlugin):
     def __init__(self, model_name: str, model_dir: str):
         self._logger = logging.getLogger(f"OnnxTiledPlugin.{model_name}")
         self._model_name = model_name
+        self._model_dir = model_dir
 
         onnx_files = sorted(
             f for f in os.listdir(model_dir) if f.endswith(".onnx")
@@ -198,6 +201,145 @@ class OnnxTiledPlugin(AutolabelPlugin):
     @property
     def supported_layers(self) -> list:
         return list(self._layer_names)
+
+    # Fine-tuning interface --------------------------------------------
+
+    @property
+    def can_fine_tune(self) -> bool:
+        return True
+
+    def list_versions(self) -> list[dict]:
+        """Devuelve las versiones disponibles: v1 (original) + fine_tuned/vN."""
+        import datetime
+
+        versions = []
+
+        # v1: ficheros .onnx en la raíz del modelo
+        root_onnx = [
+            os.path.join(self._model_dir, f)
+            for f in os.listdir(self._model_dir)
+            if f.endswith(".onnx")
+        ]
+        if root_onnx:
+            max_mtime = max(os.path.getmtime(p) for p in root_onnx)
+            date_str = datetime.datetime.fromtimestamp(max_mtime).strftime("%Y-%m-%d %H:%M")
+        else:
+            date_str = ""
+        versions.append({"label": "v1", "date": date_str, "is_original": True})
+
+        # vN: subcarpetas fine_tuned/vN/
+        fine_tuned_dir = os.path.join(self._model_dir, "fine_tuned")
+        if os.path.isdir(fine_tuned_dir):
+            for entry in os.listdir(fine_tuned_dir):
+                sub = os.path.join(fine_tuned_dir, entry)
+                if not os.path.isdir(sub) or not entry.startswith("v"):
+                    continue
+                try:
+                    int(entry[1:])
+                except ValueError:
+                    continue
+                sub_onnx = [
+                    os.path.join(sub, f)
+                    for f in os.listdir(sub)
+                    if f.endswith(".onnx")
+                ]
+                if sub_onnx:
+                    sub_mtime = max(os.path.getmtime(p) for p in sub_onnx)
+                    sub_date = datetime.datetime.fromtimestamp(sub_mtime).strftime("%Y-%m-%d %H:%M")
+                else:
+                    sub_date = ""
+                versions.append({"label": entry, "date": sub_date, "is_original": False})
+
+        # Ordenar: mayor número primero, v1 al final
+        def _version_key(v):
+            try:
+                return int(v["label"][1:])
+            except (ValueError, IndexError):
+                return 0
+
+        versions.sort(key=_version_key, reverse=True)
+        return versions
+
+    def fine_tune(self, images_and_annotations: list[dict]) -> None:
+        """Stub de fine-tuning: espera 30 s y copia .onnx originales a fine_tuned/vN/."""
+        fine_tuned_dir = os.path.join(self._model_dir, "fine_tuned")
+        os.makedirs(fine_tuned_dir, exist_ok=True)
+
+        # Determinar siguiente versión
+        max_n = 1
+        if os.path.isdir(fine_tuned_dir):
+            for entry in os.listdir(fine_tuned_dir):
+                if entry.startswith("v"):
+                    try:
+                        n = int(entry[1:])
+                        if n > max_n:
+                            max_n = n
+                    except ValueError:
+                        pass
+        next_n = max_n + 1
+
+        new_version_dir = os.path.join(fine_tuned_dir, f"v{next_n}")
+        os.makedirs(new_version_dir, exist_ok=True)
+        self._logger.info("fine_tune: creando versión v%d en %s", next_n, new_version_dir)
+
+        # Guardar imágenes y anotaciones recibidas para depuración
+        for i, item in enumerate(images_and_annotations):
+            img = item.get("image")
+            anns = item.get("annotations", [])
+            if img is not None:
+                cv2.imwrite(os.path.join(new_version_dir, f"{i:04d}.png"), img)
+            for j, mask in enumerate(anns):
+                layer_name = self._layer_names[j] if j < len(self._layer_names) else str(j)
+                if mask is not None:
+                    cv2.imwrite(
+                        os.path.join(new_version_dir, f"{i:04d}_{layer_name}.png"), mask
+                    )
+
+        time.sleep(30)
+
+        for fname in os.listdir(self._model_dir):
+            if fname.endswith(".onnx"):
+                src = os.path.join(self._model_dir, fname)
+                dst = os.path.join(new_version_dir, fname)
+                shutil.copy2(src, dst)
+                self._logger.info("fine_tune: copiado %s -> %s", src, dst)
+
+        self._logger.info("fine_tune: versión v%d lista en %s", next_n, new_version_dir)
+
+    def set_active_version(self, version: str) -> None:
+        """Carga las sesiones ONNX de la versión indicada.
+
+        Si ``version == "v1"`` usa los ficheros .onnx de la raíz del modelo.
+        Para versiones posteriores busca en ``fine_tuned/{version}/``.
+        Si la versión no existe en disco registra un warning y no cambia nada.
+        """
+        if version == "v1":
+            target_dir = self._model_dir
+        else:
+            target_dir = os.path.join(self._model_dir, "fine_tuned", version)
+
+        if not os.path.isdir(target_dir):
+            self._logger.warning(
+                "set_active_version: versión '%s' no encontrada en %s", version, target_dir
+            )
+            return
+
+        onnx_files = sorted(f for f in os.listdir(target_dir) if f.endswith(".onnx"))
+        if not onnx_files:
+            self._logger.warning(
+                "set_active_version: no hay ficheros .onnx en %s", target_dir
+            )
+            return
+
+        new_sessions = []
+        for fname in onnx_files:
+            path = os.path.join(target_dir, fname)
+            session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+            self._logger.info("set_active_version: cargado %s", path)
+            new_sessions.append(session)
+
+        self._sessions = new_sessions
+        self._logger.info("set_active_version: activa versión '%s'", version)
 
     def run(self, image: np.ndarray) -> np.ndarray:
         prob_maps = []

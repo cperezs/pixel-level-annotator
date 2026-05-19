@@ -267,6 +267,15 @@ class ActionLogger:
     def log_erase_all(self, delta: dict) -> None:
         self._write({"action": "erase_all", **delta})
 
+    def clear_log(self) -> None:
+        """Truncate the log file to an empty array and discard the redo stack."""
+        self._redo_log_stack.clear()
+        try:
+            with open(self._path, "w", encoding="utf-8") as f:
+                f.write("[]\n")
+        except OSError as exc:
+            logger.warning("ActionLogger: cannot clear %s: %s", self._path, exc)
+
     def log_autolabel_start(
         self,
         plugin_id: str,

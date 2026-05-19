@@ -113,3 +113,27 @@ class AutolabelService:
     def finalize_session(self) -> None:
         """End the current correction session (no-op if none is active)."""
         self._active_metrics = None
+
+    # ------------------------------------------------------------------
+    # Fine-tuning
+    # ------------------------------------------------------------------
+
+    def get_plugin_fine_tune_info(self, plugin_id: str) -> tuple[bool, list[dict]]:
+        """Devuelve (can_fine_tune, versions) para el plugin dado."""
+        plugin = self.get_plugin_by_id(plugin_id)
+        if plugin is None:
+            return False, []
+        return plugin.can_fine_tune, plugin.list_versions()
+
+    def run_fine_tune(self, plugin_id: str, images_and_annotations: list[dict]) -> None:
+        """Delega fine_tune() en el plugin. Llamar desde un hilo de fondo."""
+        plugin = self.get_plugin_by_id(plugin_id)
+        if plugin is None:
+            raise ValueError(f"Plugin '{plugin_id}' no encontrado.")
+        plugin.fine_tune(images_and_annotations)
+
+    def set_active_version(self, plugin_id: str, version: str) -> None:
+        """Indica al plugin la versión a usar en la próxima inferencia."""
+        plugin = self.get_plugin_by_id(plugin_id)
+        if plugin is not None and hasattr(plugin, "set_active_version"):
+            plugin.set_active_version(version)

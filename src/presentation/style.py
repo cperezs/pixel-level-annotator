@@ -1,4 +1,4 @@
-"""Centralized design tokens and Qt stylesheet for the PixelLabeler UI.
+"""Centralized design tokens and Qt stylesheet for the PixelSmart UI.
 
 Translates the design system from design/DESIGN.md and design/code.html
 into Python constants and a single QSS stylesheet string.  Every

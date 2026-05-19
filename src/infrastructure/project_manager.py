@@ -2,9 +2,9 @@
 
 Handles two distinct configuration files:
 
-1. **Application-level** dot-config (``~/.pixellabeler/app.toml``) that
+1. **Application-level** dot-config (``~/.pixelsmart/app.toml``) that
    remembers the last opened project folder.
-2. **Project-level** config (``.pixellabeler/project.toml``) inside each
+2. **Project-level** config (``.pixelsmart/project.toml``) inside each
    project folder that stores the project settings.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Resolved lazily to the application root by set_app_root().
 _app_config_file: Optional[str] = None
 
-_PROJECT_DIR_NAME = ".pixellabeler"
+_PROJECT_DIR_NAME = ".pixelsmart"
 _PROJECT_CONFIG_NAME = "project.json"
 
 
@@ -33,7 +33,7 @@ class ProjectManager:
     def set_app_root(root: str) -> None:
         """Set the application root directory for the app-level config file."""
         global _app_config_file
-        _app_config_file = os.path.join(root, ".pixellabeler_app.json")
+        _app_config_file = os.path.join(root, ".pixelsmart_app.json")
 
     # ------------------------------------------------------------------
     # Application-level config (last opened folder)
@@ -103,6 +103,7 @@ class ProjectManager:
             config.selected_plugin_id = data.get("selected_plugin_id", config.selected_plugin_id)
             config.plugin_configs = data.get("plugin_configs", config.plugin_configs)
             config.global_layer_opacity = data.get("global_layer_opacity", config.global_layer_opacity)
+            config.show_stats_panel = data.get("show_stats_panel", config.show_stats_panel)
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Could not read project config from %s: %s", config_path, exc)
         return config

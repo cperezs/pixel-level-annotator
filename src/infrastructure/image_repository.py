@@ -60,6 +60,16 @@ class ImageRepository:
     # Listing
     # ------------------------------------------------------------------
 
+    @property
+    def images_dir(self) -> str:
+        """Absolute or relative path to the images directory."""
+        return self._images_dir
+
+    @property
+    def annotations_dir(self) -> str:
+        """Absolute or relative path to the annotations directory."""
+        return self._annotations_dir
+
     def list_images(self) -> list[str]:
         """Return sorted base-filenames of every image in *images_dir*."""
         exts = {".jpg", ".jpeg", ".png", ".gif"}

@@ -6,6 +6,7 @@ data/
 .DS_Store
 *.onnx
 .pixellabeler_app.json
+.pixelsmart_app.json
 TODO/
 
 # Byte-compiled / optimized / DLL files

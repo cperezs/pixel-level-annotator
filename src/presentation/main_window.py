@@ -44,8 +44,10 @@ from infrastructure.project_manager import ProjectManager
 from application.annotator_controller import AnnotatorController
 from application.app_state import PluginConfig
 from presentation.toolbar_panel import ToolbarPanel
-from presentation.right_panel import RightPanel, LayerMappingDialog
+from presentation.right_panel import RightPanel
+from presentation.model_config_dialog import LayerMappingDialog
 from presentation.gallery_panel import GalleryPanel
+from presentation.stats_panel import StatsPanel
 from presentation.status_bar import StatusBar
 from presentation.welcome_screen import WelcomeScreen
 from presentation.shortcut_manager import ShortcutManager
@@ -86,12 +88,32 @@ class _AutolabelWorker(QThread):
         self.finished.emit(error)
 
 
+class _FineTuneWorker(QThread):
+    """Ejecuta fine_tune() del plugin en un hilo de fondo."""
+    finished = pyqtSignal(object)  # emite None en éxito o str con mensaje de error
+
+    def __init__(self, controller, plugin_id: str, images_and_annotations: list, parent=None):
+        super().__init__(parent)
+        self._controller = controller
+        self._plugin_id = plugin_id
+        self._images_and_annotations = images_and_annotations
+
+    def run(self):
+        try:
+            self._controller.autolabel_service.run_fine_tune(
+                self._plugin_id, self._images_and_annotations
+            )
+            self.finished.emit(None)
+        except Exception as e:
+            self.finished.emit(str(e))
+
+
 class MainWindow(QMainWindow):
     """Top-level Qt window for the Pixel Annotation Tool."""
 
     def __init__(self, viewer_class=None) -> None:
         super().__init__()
-        self.setWindowTitle("PixelLabeler — Professional Annotation Suite")
+        self.setWindowTitle("PixelSmart — Professional Annotation Suite")
         self.setGeometry(100, 100, 1440, 900)
 
         # Apply global stylesheet
@@ -104,6 +126,8 @@ class MainWindow(QMainWindow):
         self._current_web_request = None
         self._save_timer: Optional[QTimer] = None
         self._help_window: Optional[HelpWindow] = None
+        self._fine_tune_worker: Optional[_FineTuneWorker] = None
+        self._fine_tune_plugin_display_name: str = ""
 
         # Stacked widget: 0 = welcome screen, 1 = annotator
         self._stack = QStackedWidget()
@@ -197,6 +221,11 @@ class MainWindow(QMainWindow):
         self._wire_right_panel()
         self._wire_gallery()
 
+        # Restore stats panel visibility from saved project config
+        if self._project_config and self._project_config.show_stats_panel:
+            self._stats_panel.setVisible(True)
+            self._toolbar.set_stats_panel_open(True)
+
         # Set project name in the right panel (always the folder name)
         self._right_panel.set_project_name(self._project_config.name)
 
@@ -232,7 +261,7 @@ class MainWindow(QMainWindow):
 
         # Show annotator
         self._stack.setCurrentIndex(1)
-        self.setWindowTitle(f"PixelLabeler — {self._project_config.name}")
+        self.setWindowTitle(f"PixelSmart — {self._project_config.name}")
         QTimer.singleShot(0, viewer.setFocus)
 
     def _show_help(self) -> None:
@@ -279,6 +308,7 @@ class MainWindow(QMainWindow):
                 layer_mapping=pcfg.get("layer_mapping", {}),
                 conflict_strategy=pcfg.get("conflict_strategy", "argmax"),
                 layer_priorities=pcfg.get("layer_priorities", {}),
+                selected_version=pcfg.get("selected_version", "v1"),
             )
 
     def _build_annotator_ui(self, layer_configs, viewer) -> None:
@@ -293,6 +323,8 @@ class MainWindow(QMainWindow):
         self._right_panel = RightPanel(layer_configs)
         self._gallery = GalleryPanel()
         self._gallery.setVisible(False)
+        self._stats_panel = StatsPanel()
+        self._stats_panel.setVisible(False)
         self._status_bar = StatusBar()
         self._progress_value = 0
 
@@ -316,6 +348,7 @@ class MainWindow(QMainWindow):
         canvas_layout = QVBoxLayout(canvas_wrapper)
         canvas_layout.setContentsMargins(0, 0, 0, 0)
         canvas_layout.addWidget(viewer, 1)
+        middle.addWidget(self._stats_panel, 0)
         middle.addWidget(canvas_wrapper, 1)
         self._canvas_wrapper = canvas_wrapper
 
@@ -326,6 +359,9 @@ class MainWindow(QMainWindow):
 
         # Status bar
         root.addWidget(self._status_bar)
+
+        self._stats_panel.close_requested.connect(self._on_stats_panel_close)
+        self._stats_panel.refresh_requested.connect(self._refresh_stats)
 
         self._annotator_widget = main_widget
         self._stack.addWidget(main_widget)
@@ -355,6 +391,7 @@ class MainWindow(QMainWindow):
                 )
 
         controller.on_progress_changed(_on_annotations_changed)
+        controller.on_progress_changed(self._refresh_stats)
 
     def _save_project_config(self) -> None:
         """Snapshot current state into ProjectConfig and save to disk."""
@@ -380,12 +417,14 @@ class MainWindow(QMainWindow):
         cfg.last_image = self._controller.current_filename
         cfg.active_tool = self._controller.state.tool.active
         cfg.selected_plugin_id = self._toolbar.get_selected_plugin_id()
+        cfg.show_stats_panel = self._stats_panel.isVisible()
         # Serialize plugin configs
         cfg.plugin_configs = {}
         for pid, pc in s.plugin_configs.items():
             entry: dict = {
                 "layer_mapping": pc.layer_mapping,
                 "conflict_strategy": pc.conflict_strategy,
+                "selected_version": pc.selected_version,
             }
             if pc.conflict_strategy != "argmax":
                 entry["layer_priorities"] = pc.layer_priorities
@@ -411,6 +450,21 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event) -> None:
+        if self._fine_tune_worker is not None and self._fine_tune_worker.isRunning():
+            reply = QMessageBox.question(
+                self,
+                "Fine-tuning in progress",
+                "A fine-tuning process is currently running. "
+                "If you close the application, the results will be lost.\n\n"
+                "Do you want to close anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+            self._fine_tune_worker.terminate()
+            self._fine_tune_worker.wait(2000)
         self._save_project_config()
         if self._controller:
             self._controller.close()
@@ -434,7 +488,7 @@ class MainWindow(QMainWindow):
         left = QHBoxLayout()
         left.setSpacing(16)
 
-        brand = QLabel("PixelLabeler")
+        brand = QLabel("PixelSmart")
         brand.setStyleSheet(
             f"color: {PRIMARY}; font-size: 16px; font-weight: 700; "
             f"letter-spacing: -0.5px;"
@@ -566,6 +620,7 @@ class MainWindow(QMainWindow):
         tb.on_autolabel_run(self._cb_run_autolabel)
         tb.on_autolabel_configure(self._cb_configure_autolabel)
         tb.on_autolabel_plugin_changed(self._cb_autolabel_plugin_changed)
+        tb.on_stats_toggled(self._on_stats_toggled)
 
         # Top bar buttons
         self._q_undo_btn.clicked.connect(ctrl.undo)
@@ -655,7 +710,10 @@ class MainWindow(QMainWindow):
             self,
             "Erase All Annotations",
             "This will permanently erase <b>all annotations</b> on the current image.<br>"
-            "The action can be undone with Ctrl+Z.<br><br>"
+            "The edit log and all statistics (pixel counts, time) will also be "
+            "<b>permanently cleared</b> and cannot be recovered.<br><br>"
+            "The annotation pixels can be recovered with Ctrl+Z, "
+            "but statistics and edit history cannot.<br><br>"
             "Are you sure?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -672,6 +730,18 @@ class MainWindow(QMainWindow):
             # or when a new image is added to the repo.
             self._populate_gallery()
 
+    def _on_stats_toggled(self, open: bool) -> None:
+        # showEvent on the panel fires refresh_requested → _refresh_stats automatically
+        self._stats_panel.setVisible(open)
+        self._toolbar.set_stats_panel_open(open)
+
+    def _on_stats_panel_close(self) -> None:
+        self._on_stats_toggled(False)
+
+    def _refresh_stats(self, _progress: int = 0) -> None:
+        if self._stats_panel.isVisible() and self._controller:
+            self._stats_panel.update_stats(self._controller.get_display_stats())
+
     def _populate_gallery(self) -> None:
         filenames = self._image_repo.list_images()
         self._gallery.populate(
@@ -685,6 +755,7 @@ class MainWindow(QMainWindow):
             self._gallery.set_current_filename(self._controller.current_filename)
 
     def _on_gallery_image_selected(self, filename: str) -> None:
+        self._stats_panel.reset()
         self._controller.load_image(filename)
         self._gallery.set_current_filename(filename)
         self._update_status()
@@ -753,7 +824,17 @@ class MainWindow(QMainWindow):
         current_mapping = current_config.layer_mapping if current_config else {}
         current_strategy = current_config.conflict_strategy if current_config else "argmax"
         current_priorities = current_config.layer_priorities if current_config else {}
+        current_version = current_config.selected_version if current_config else "v1"
 
+        can_ft, versions = self._controller.autolabel_service.get_plugin_fine_tune_info(plugin_id)
+        is_training = (
+            self._fine_tune_worker is not None and self._fine_tune_worker.isRunning()
+        )
+        training_name = (
+            getattr(self, "_fine_tune_plugin_display_name", "") if is_training else ""
+        )
+
+        dialog_ref: list = [None]
         dialog = LayerMappingDialog(
             plugin.display_name,
             plugin.supported_layers,
@@ -761,15 +842,34 @@ class MainWindow(QMainWindow):
             current_mapping,
             current_strategy,
             current_priorities,
-            self,
+            can_fine_tune=can_ft,
+            available_versions=versions,
+            current_version=current_version,
+            is_training=is_training,
+            training_plugin_name=training_name,
+            on_fine_tune=lambda: self._start_fine_tune(plugin_id, dialog_ref[0]),
+            parent=self,
         )
+        dialog_ref[0] = dialog
+
+        if self._fine_tune_worker is not None:
+            self._fine_tune_worker.finished.connect(
+                lambda _err: dialog.set_training_state(False) if dialog.isVisible() else None
+            )
+
         if dialog.exec() == QDialog.DialogCode.Accepted:
             cfg = dialog.get_config()
-            self._controller.state.plugin_configs[plugin_id] = PluginConfig(
+            new_pc = PluginConfig(
                 layer_mapping=cfg["layer_mapping"],
                 conflict_strategy=cfg["conflict_strategy"],
                 layer_priorities=cfg["layer_priorities"],
+                selected_version=dialog.selected_version if can_ft else current_version,
             )
+            self._controller.state.plugin_configs[plugin_id] = new_pc
+            if can_ft:
+                self._controller.autolabel_service.set_active_version(
+                    plugin_id, new_pc.selected_version
+                )
             self._toolbar.update_mapping_indicator(has_mapping=True)
             self._save_project_config()
 
@@ -813,6 +913,100 @@ class MainWindow(QMainWindow):
         # FEATURE-018: return keyboard focus to the canvas after the model finishes.
         if hasattr(self, "_viewer"):
             QTimer.singleShot(0, self._viewer.setFocus)
+
+    def _start_fine_tune(self, plugin_id: str, config_dialog=None) -> None:
+        """Abre el diálogo de selección de imágenes y lanza el worker de fine-tuning."""
+        import numpy as np
+        from presentation.fine_tune_selection_dialog import FineTuneSelectionDialog
+
+        if self._controller is None:
+            return
+        plugin = self._controller.autolabel_service.get_plugin_by_id(plugin_id)
+        if plugin is None:
+            return
+
+        # Abrir diálogo de selección de imágenes (solo muestra las anotadas al 100%)
+        sel_dialog = FineTuneSelectionDialog(
+            self._image_repo.images_dir,
+            self._image_repo.annotations_dir,
+            self._layer_configs,
+            parent=config_dialog or self,
+        )
+        if sel_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        selected_filenames = sel_dialog.get_selected_filenames()
+        if not selected_filenames:
+            return
+
+        # Construir images_and_annotations en orden de capas del plugin
+        plugin_config = self._controller.state.plugin_configs.get(plugin_id)
+        layer_mapping = plugin_config.layer_mapping if plugin_config else {}
+        app_layer_names = [lc.name for lc in self._layer_configs]
+        app_layer_index = {name: i for i, name in enumerate(app_layer_names)}
+        plugin_layers = plugin.supported_layers
+        nlayers = len(app_layer_names)
+
+        images_and_annotations: list[dict] = []
+        for fname in selected_filenames:
+            try:
+                doc = self._image_repo.load(fname, nlayers, app_layer_names)
+            except Exception:
+                logger.exception("fine_tune: no se pudo cargar %s", fname)
+                continue
+            anns_for_plugin = []
+            for pl_name in plugin_layers:
+                app_name = layer_mapping.get(pl_name, pl_name)
+                app_idx = app_layer_index.get(app_name, -1)
+                if 0 <= app_idx < len(doc.annotations):
+                    anns_for_plugin.append(doc.annotations[app_idx].copy())
+                else:
+                    anns_for_plugin.append(
+                        np.zeros(doc.image.shape[:2], dtype=np.uint8)
+                    )
+            images_and_annotations.append(
+                {"image": doc.image, "annotations": anns_for_plugin}
+            )
+
+        if not images_and_annotations:
+            return
+
+        self._fine_tune_plugin_display_name = plugin.display_name
+
+        # Informar al usuario que el entrenamiento se realiza en segundo plano
+        QMessageBox.information(
+            self,
+            "Fine-tuning started",
+            f"Fine-tuning of {plugin.display_name} has started in the background.\n"
+            "You will be notified when it completes.",
+        )
+
+        # Cerrar el diálogo de configuración del modelo
+        if config_dialog is not None:
+            config_dialog.accept()
+
+        # Lanzar worker
+        self._fine_tune_worker = _FineTuneWorker(
+            self._controller, plugin_id, images_and_annotations, self
+        )
+        self._fine_tune_worker.finished.connect(self._on_fine_tune_finished)
+        self._fine_tune_worker.start()
+
+    def _on_fine_tune_finished(self, error: object) -> None:
+        display_name = self._fine_tune_plugin_display_name
+        self._fine_tune_worker = None
+        if error is None:
+            QMessageBox.information(
+                self,
+                "Fine-tuning complete",
+                f"Fine-tuning of {display_name} completed successfully.",
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Fine-tuning Error",
+                f"Fine-tuning of {display_name} failed:\n{error}",
+            )
 
     def _show_busy_overlay(self, message: str = "Processing…") -> None:
         """Cover the entire window with a translucent blocking overlay."""
@@ -892,7 +1086,7 @@ class MainWindow(QMainWindow):
             return
         w = new
         while w is not None:
-            if w is self._toolbar or w is self._right_panel:
+            if w is self._toolbar or w is self._right_panel or w is self._stats_panel:
                 QTimer.singleShot(0, self._viewer.setFocus)
                 return
             # Also redirect if focus lands on the viewer's internal canvas

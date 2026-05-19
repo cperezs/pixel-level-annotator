@@ -154,6 +154,7 @@ class ToolbarPanel(QWidget):
         self._cb_tool_selected: Optional[Callable[[str], None]] = None
         self._cb_autolabel_plugin_changed: Optional[Callable] = None
         self._cb_autolabel_configure: Optional[Callable] = None
+        self._cb_stats_toggled: Optional[Callable[[bool], None]] = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -185,6 +186,7 @@ class ToolbarPanel(QWidget):
         self._build_selector_group()
         self._build_fill_group()
         self._build_erase_all_button()
+        self._build_stats_button()
         self._build_autolabel_section()
         self._build_web_service_section()
         self._layout.addStretch()
@@ -239,6 +241,15 @@ class ToolbarPanel(QWidget):
 
     def on_erase_all_clicked(self, cb: Callable) -> None:
         self._q_erase_all_button.clicked.connect(cb)
+
+    def on_stats_toggled(self, cb: Callable[[bool], None]) -> None:
+        self._cb_stats_toggled = cb
+
+    def set_stats_panel_open(self, open: bool) -> None:
+        """Sync the toggle button state without firing the callback."""
+        self._q_stats_button.blockSignals(True)
+        self._q_stats_button.setChecked(open)
+        self._q_stats_button.blockSignals(False)
 
     def on_autolabel_run(self, cb: Callable) -> None:
         self._q_autolabel_run_button.clicked.connect(cb)
@@ -362,7 +373,7 @@ class ToolbarPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _build_header(self) -> None:
-        self._layout.addWidget(_section_header("Annotation Tools"))
+        self._layout.addWidget(_section_header("ANNOTATION TOOLS"))
 
     def _build_selector_group(self) -> None:
         card = _ToolCard()
@@ -491,6 +502,42 @@ class ToolbarPanel(QWidget):
             }}
         """)
         self._layout.addWidget(self._q_erase_all_button)
+
+    def _build_stats_button(self) -> None:
+        self._q_stats_button = QPushButton("Show Statistics")
+        self._q_stats_button.setCheckable(True)
+        self._q_stats_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._q_stats_button.setMinimumHeight(42)
+        self._q_stats_button.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(161, 250, 255, 0.06);
+                color: {ON_SURFACE_VARIANT};
+                border: none;
+                border-radius: 10px;
+                text-align: left; padding: 8px 12px;
+                font-size: {FONT_SIZE_SM}px; font-weight: 600;
+                letter-spacing: 0.5px;
+            }}
+            QPushButton:hover {{
+                background: rgba(161, 250, 255, 0.13);
+                color: {PRIMARY};
+                border: 1px solid rgba(161, 250, 255, 0.45);
+            }}
+            QPushButton:pressed {{
+                background: rgba(161, 250, 255, 0.2);
+            }}
+            QPushButton:checked {{
+                background: rgba(161, 250, 255, 0.16);
+                color: {PRIMARY};
+                border: 1px solid rgba(161, 250, 255, 0.5);
+            }}
+        """)
+        self._q_stats_button.toggled.connect(self._on_stats_button_toggled)
+        self._bottom_layout.insertWidget(0, self._q_stats_button)
+
+    def _on_stats_button_toggled(self, checked: bool) -> None:
+        if self._cb_stats_toggled:
+            self._cb_stats_toggled(checked)
 
     def _build_gallery_button(self) -> None:
         self._q_gallery_button = QPushButton("  \U0001F5BC  Gallery")

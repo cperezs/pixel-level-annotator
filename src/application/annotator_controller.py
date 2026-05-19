@@ -512,16 +512,23 @@ class AnnotatorController:
         return self._document is not None and bool(self._document._redo_stack)
 
     def erase_all(self) -> None:
-        """Clear every annotation on the current image (undoable)."""
+        """Clear every annotation on the current image and reset all statistics.
+
+        The canvas erase is undoable via Ctrl+Z.  Statistics (pixel counts,
+        time) and the edit log are permanently cleared and cannot be recovered.
+        """
         if not self._document:
             return
-        if self._action_logger:
-            self._action_logger.snapshot_before(self._document.annotations)
         self._document.clear_all_annotations()
+        if self._metadata:
+            self._metadata.update_pixel_stats(self._document.annotations)
+        if self._time_tracker:
+            current_layer = self._time_tracker._current_layer
+            self._time_tracker.reset()
+            if current_layer is not None:
+                self._time_tracker.change(current_layer)
         if self._action_logger:
-            delta = self._action_logger.compute_delta(self._document.annotations)
-            self._action_logger.discard_redo_log_entries()
-            self._action_logger.log_erase_all(delta)
+            self._action_logger.clear_log()
         self._image_repo.save_annotations(self._document, self._current_filename, [lc.name for lc in self._layer_configs])
         self._sync_annotation_overlay()
         self._notify_progress()
@@ -564,8 +571,17 @@ class AnnotatorController:
             return error
 
         self._image_repo.save_annotations(self._document, self._current_filename, [lc.name for lc in self._layer_configs])
+        if self._metadata:
+            for name in self._metadata.layer_names:
+                self._metadata.pixels_per_layer[name] = 0
+            self._metadata.save()
         if self._time_tracker:
+            current_layer = self._time_tracker._current_layer
             self._time_tracker.reset()
+            if current_layer is not None:
+                self._time_tracker.change(current_layer)
+        if self._action_logger:
+            self._action_logger.clear_log()
         return None
 
     def finalize_autolabel(self) -> None:
@@ -595,6 +611,79 @@ class AnnotatorController:
         """Flush metadata to disk."""
         if self._metadata:
             self._metadata.save()
+
+    def get_display_stats(self) -> dict:
+        """Return all display statistics for the current image.
+
+        Returns a dict with:
+        - operation counts (pen_stroke, erase_stroke, …) from the log file
+        - pixels_per_layer, total_pixels_annotated from metadata
+        - time_by_layer, total_time including the ongoing un-flushed tick
+        - layer_names: ordered list for display
+        """
+        import time as _time
+
+        op_keys = (
+            "pen_stroke",
+            "erase_stroke",
+            "fill_commit",
+            "selector_commit",
+            "erase_all",
+            "autolabel_end",
+        )
+        ops: dict[str, int] = {k: 0 for k in op_keys}
+
+        # Operation counts from log file
+        if self._action_logger is not None:
+            path = self._action_logger._path
+            if os.path.exists(path):
+                try:
+                    import json as _json
+                    with open(path, "r", encoding="utf-8") as fh:
+                        entries: list[dict] = _json.load(fh)
+                    for entry in entries:
+                        action = entry.get("action")
+                        if action in ops:
+                            ops[action] += 1
+                except (OSError, ValueError):
+                    pass
+
+        # Pixel stats from metadata (already up to date after each commit)
+        pixels_per_layer: dict[str, int] = {}
+        total_pixels_annotated = 0
+        layer_names: list[str] = [lc.name for lc in self._layer_configs]
+        if self._metadata is not None:
+            pixels_per_layer = dict(self._metadata.pixels_per_layer)
+            total_pixels_annotated = sum(pixels_per_layer.values())
+
+        # Time stats — add the current un-flushed tick so the display is live
+        time_by_layer: dict[str, float] = {n: 0.0 for n in layer_names}
+        if self._metadata is not None:
+            for name in layer_names:
+                time_by_layer[name] = self._metadata.time_by_layer.get(name, 0.0)
+            if (
+                self._time_tracker is not None
+                and self._time_tracker._current_layer is not None
+                and self._time_tracker._start_time is not None
+            ):
+                elapsed = _time.time() - self._time_tracker._start_time
+                idx = self._time_tracker._current_layer
+                if 0 <= idx < len(layer_names):
+                    time_by_layer[layer_names[idx]] += elapsed
+        total_time = sum(time_by_layer.values())
+
+        return {
+            **ops,
+            "pixels_per_layer": pixels_per_layer,
+            "total_pixels_annotated": total_pixels_annotated,
+            "time_by_layer": time_by_layer,
+            "total_time": total_time,
+            "layer_names": layer_names,
+        }
+
+    # Back-compat alias
+    def get_edit_stats(self) -> dict:
+        return self.get_display_stats()
 
     def close(self) -> None:
         """Clean up before the application terminates."""

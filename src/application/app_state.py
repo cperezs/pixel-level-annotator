@@ -52,6 +52,7 @@ class PluginConfig:
     layer_mapping: dict = field(default_factory=dict)
     conflict_strategy: str = "argmax"
     layer_priorities: dict = field(default_factory=dict)
+    selected_version: str = "v1"
 
 
 # ------------------------------------------------------------------
